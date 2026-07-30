@@ -459,7 +459,8 @@ const DISTRICTS = [
     hoverT:'WORKLOADS / PROCESSES', hoverS:'コンテナ・Pod・ホストのプロセス — すべての起点',
     hoverM:['execve · openat · connect · ptrace','~80 interesting syscalls'],
     jp:'ワークロード', en:'workloads / processes',
-    x0:-84,x1:-62,z0:-19,z1:19, top:22, color:C.g20, cam:[-118,46,58],
+    build:BUILD_workloads,
+    w:22, d:38, top:22, color:C.g20, cam:[-118,46,58],
     metrics:[['観測対象','syscall + 一部の非 syscall'],['改造','アプリ変更ゼロ']],
     body:`
 <h3>ここで何が起きているか</h3>
@@ -478,7 +479,8 @@ const DISTRICTS = [
     hoverT:'DRIVER — KERNEL SPACE', hoverS:'tracepoint にアタッチし、関心のある syscall だけを通す門',
     hoverM:['modern_ebpf · ebpf · kmod','kernel-side filter = 最も安いフィルタ'],
     jp:'ドライバ（カーネル空間）', en:'driver — modern_ebpf / ebpf / kmod',
-    x0:-55,x1:-42,z0:-23,z1:23, top:18, color:C.falco, cam:[-88,40,62],
+    build:BUILD_driver,
+    w:13, d:46, top:18, color:C.falco, cam:[-88,40,62],
     metrics:[['既定','modern_ebpf (CO-RE)'],['要件','kernel ≥ 5.8']],
     body:`
 <h3>3つの目のうち、どれを使うか</h3>
@@ -498,7 +500,8 @@ const DISTRICTS = [
     hoverT:'PER-CPU RING BUFFER', hoverS:'カーネルが書き、ユーザ空間が読む共有メモリ',
     hoverM:['8 MiB / CPU (default preset)','唯一「落ちる」場所 — n_drops'],
     jp:'リングバッファ', en:'per-cpu ring buffer',
-    x0:-33,x1:-6,z0:-19,z1:19, top:9, color:C.g30, cam:[-46,38,66],
+    build:BUILD_ring,
+    w:27, d:38, top:9, color:C.g30, cam:[-46,38,66],
     metrics:[['既定サイズ','8 MiB / CPU'],['危険信号','n_drops > 0']],
     body:`
 <h3>唯一、イベントが失われる場所</h3>
@@ -518,7 +521,8 @@ const DISTRICTS = [
     hoverT:'libscap / libsinsp — STATE ENGINE', hoverS:'生の syscall に文脈を貼り、意味のあるイベントに変える',
     hoverM:['thread table · fd table','container / k8s metadata'],
     jp:'状態エンジン', en:'libscap / libsinsp',
-    x0:2,x1:27,z0:-21,z1:21, top:22, color:0x9AD9E8, cam:[8,42,72],
+    build:BUILD_state,
+    w:25, d:42, top:22, color:0x9AD9E8, cam:[8,42,72],
     metrics:[['thread table','pid/exe/args/uid/親子'],['fd table','fd → path / socket']],
     body:`
 <h3>「fd=7 に write した」を意味に変える</h3>
@@ -539,7 +543,8 @@ const DISTRICTS = [
     hoverT:'FALCO RULES ENGINE', hoverS:'condition + output + priority。イベント型ごとに評価対象を絞る',
     hoverM:['rules · macros · lists','per-event-type ruleset bitmask'],
     jp:'ルールエンジン', en:'falco rules engine',
-    x0:34,x1:57,z0:-21,z1:21, top:26, color:0xD9C0E4, cam:[46,44,72],
+    build:BUILD_rules,
+    w:23, d:42, top:26, color:0xD9C0E4, cam:[46,44,72],
     metrics:[['ルール定義','condition / output / priority / tags'],['優先度','EMERGENCY … DEBUG']],
     body:`
 <h3>ルールは3つの部品でできている</h3>
@@ -560,7 +565,8 @@ const DISTRICTS = [
     hoverT:'OUTPUT CHANNELS', hoverS:'stdout / file / syslog / program / http / gRPC',
     hoverM:['Falcosidekick → 多数の宛先','Falco Talon → 自動応答'],
     jp:'出力チャネル', en:'outputs / falcosidekick / talon',
-    x0:64,x1:83,z0:-17,z1:17, top:16, color:C.lumin, cam:[86,38,58],
+    build:BUILD_outputs,
+    w:19, d:34, top:16, color:C.lumin, cam:[86,38,58],
     metrics:[['ネイティブ','stdout / file / syslog / program / http / gRPC'],['実運用','Falcosidekick がハブ']],
     body:`
 <h3>鳴った先をどう配るか</h3>
@@ -577,7 +583,8 @@ const DISTRICTS = [
     hoverT:'PLUGIN INPUTS (BYPASS LANE)', hoverS:'syscall 以外の入力も同じルールエンジンへ',
     hoverM:['k8saudit · cloudtrail · gcpaudit','okta · github · json'],
     jp:'プラグイン入力', en:'plugin inputs — bypass lane',
-    x0:-86,x1:-64,z0:-52,z1:-30, top:12, color:0xF3C99A, cam:[-96,40,10],
+    build:BUILD_plugins,
+    w:22, d:22, top:12, lane:'north', after:'workloads', dx:-2, color:0xF3C99A, cam:[-96,40,10],
     metrics:[['入力側','k8saudit / cloudtrail / gcpaudit / okta / github'],['共通点','同じルール言語で書ける']],
     body:`
 <h3>カーネルの外の出来事も同じ言語で</h3>
@@ -596,7 +603,8 @@ const DISTRICTS = [
     hoverT:'SYSDIG SECURE — PLATFORM LAYER', hoverS:'同じ libs・同じ Falco エンジン。違いは周辺にある',
     hoverM:['policies ↓ · events + captures ↑','runtime insights で相関'],
     jp:'Sysdig Secure', en:'platform layer — commercial',
-    x0:52,x1:98,z0:-58,z1:-26, top:8, y:31, color:C.deepSee, cam:[104,62,10],
+    build:BUILD_sysdig,
+    w:46, d:32, top:8, y:31, lane:'north', after:'outputs', dx:-6, color:C.deepSee, cam:[104,62,10],
     metrics:[['エンジン','Falco と同一（Sysdig が作った）'],['付加価値','記憶・相関・手']],
     body:`
 <h3>エンジンは同じ。違うのは周辺</h3>
@@ -624,8 +632,121 @@ const DISTRICTS = [
 <h3>手 — 応答</h3>
 <p>コンテナの kill / pause、Sysdig Sage による説明。検知から封じ込めまでを同じ文脈の中で行える。</p>
 <div class="takeaway"><span class="cv">▸</span>OSS Falco は目。Sysdig は目 + 記憶 + 相関 + 手。芯は同じものを共有している。</div>`
+  },
+  {
+    id:'falcoctl', n:'09', tag:'RULE DISTRIBUTION',
+    hoverT:'falcoctl — RULE & PLUGIN DISTRIBUTION',
+    hoverS:'ルールとプラグインは OCI アーティファクトとして配られる',
+    hoverM:['stable / incubating / sandbox','同梱されるのは stable だけ'],
+    jp:'ルール配布', en:'falcoctl — oci artifacts',
+    build:BUILD_falcoctl,
+    w:20, d:16, top:14, lane:'north', after:'rules', dx:-4, color:0xC9AEDA,
+    metrics:[['配布形式','OCI アーティファクト'],['同梱','maturity_stable のみ']],
+    body:`
+<h3>ルールはイメージに焼かない</h3>
+<p>Falco のルールとプラグインは <strong>OCI アーティファクト</strong>としてレジストリから配られ、<code>falcoctl</code> が取得と更新を担う。<span class="mark">ルールを更新するために Falco を再デプロイしなくていい</span>、というのがここの意味。</p>
+<h3>成熟度が段になっている</h3>
+<ul>
+<li><strong>Stable</strong> — <span class="mark">リリースパッケージに同梱されるのはこれだけ</span>。<code>falco_rules.yaml</code> に入っている</li>
+<li><strong>Incubating</strong> — 一定の堅牢性はあるが用途がより限定的。<em>別途インストールが必要</em></li>
+<li><strong>Sandbox</strong> — より実験的なもの</li>
+</ul>
+<p>（ほかに Deprecated がある。）「Falco の既定ルールは思ったより少ない」と感じたら、それは stable しか入っていないから。incubating を足すかどうかは、誤検知をどこまで引き受けるかの判断になる。</p>
+<h3>Helm の3つのキーは別物</h3>
+<ul>
+<li><code>falcoctl.config.artifact.install.refs</code> — 起動時に<strong>取得</strong>するもの</li>
+<li><code>falcoctl.config.artifact.follow.refs</code> — <strong>自動更新</strong>の対象にするもの</li>
+<li><code>falco.rules_files</code> — エンジンが実際に<strong>読み込む</strong>もの</li>
+</ul>
+<p>取得しただけでは読み込まれない。読み込んでいても follow に入れていなければ古いままになる。3つが揃っていないと「入れたはずのルールが効いていない」が起きる。</p>
+<h3>Sysdig の場合</h3>
+<p>同じ役割を backend が担う。マネージドルールと Sysdig TRT の脅威コンテンツがポリシーとして降りてくるので、この地区の仕事は Sysdig Secure 側に移る。STACK を切り替えると、ルールの流れの出どころがこの地区から上空のプラットフォームに変わる。</p>
+<div class="takeaway"><span class="cv">▸</span>ルールは成果物。バージョンがあり、配布経路があり、更新戦略が要る。</div>`
   }
 ];
+
+/* ============================================================
+   1b. layout engine — the reason a new district is cheap to add
+   ------------------------------------------------------------
+   Districts declare how much room they need (w × d), which lane they sit
+   in, and what they hang off. Nothing above is an absolute coordinate.
+   Everything downstream — camera fit, minimap bounds and colours, the
+   particle stage boundaries, the Shield overlay — is derived from this,
+   so appending a district does not require touching another number.
+
+     lane: 'flow'   on the syscall→alert axis, laid out west→east in order
+           'north'  behind the flow band  (-z), anchored to `after`
+           'south'  in front of it        (+z), anchored to `after`
+     y:            elevation, for decks that float over the city
+     dx:           x nudge relative to the anchor district
+     cam:          optional hand-tuned camera; derived if omitted
+   ============================================================ */
+const FLOW_X0 = -84, FLOW_GAP = 8, LANE_PAD = 10, BOX_PAD = 5;
+const byId = id => DISTRICTS.find(d => d.id === id);
+const isFlow = d => !d.lane || d.lane === 'flow';
+
+function layout(){
+  let x = FLOW_X0;
+  const flow = DISTRICTS.filter(isFlow);
+  for(const d of flow){
+    d.x0 = x;         d.x1 = x + d.w;
+    d.z0 = -d.d/2;    d.z1 = d.d/2;
+    x = d.x1 + FLOW_GAP;
+  }
+  /* one shared setback for every off-flow lane, so annexes line up */
+  const band = Math.max(...flow.map(d => d.d)) / 2;
+  for(const d of DISTRICTS){
+    if(isFlow(d)) continue;
+    const host = byId(d.after) || flow[0];
+    d.x0 = host.x0 + (d.dx || 0);
+    d.x1 = d.x0 + d.w;
+    const zc = (d.lane === 'south' ? 1 : -1) * (band + LANE_PAD + d.d/2);
+    d.z0 = zc - d.d/2;
+    d.z1 = zc + d.d/2;
+  }
+  for(const d of DISTRICTS){
+    d.y  = d.y || 0;
+    d.cx = (d.x0 + d.x1)/2;
+    d.cz = (d.z0 + d.z1)/2;
+    /* a serviceable 3/4 view of this district, if none was hand-picked */
+    if(!d.cam) d.cam = [d.cx - d.w*0.9, d.y + d.top + 26, d.cz + d.d*1.15 + 26];
+  }
+}
+layout();
+
+/* the city's extent, for the home-shot fit and the minimap */
+function cityBox(){
+  const b = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for(const d of DISTRICTS){
+    b.expandByPoint(v.set(d.x0 - BOX_PAD, 0, d.z0 - BOX_PAD));
+    b.expandByPoint(v.set(d.x1 + BOX_PAD, d.y + d.top + 6, d.z1 + BOX_PAD));
+  }
+  return b;
+}
+const hex6 = n => '#' + n.toString(16).padStart(6, '0');
+
+/* where the particle simulation changes behaviour, in district terms */
+const ST = {};
+(function stages(){
+  const wl=byId('workloads'), dr=byId('driver'), rg=byId('ring'), st=byId('state'),
+        ru=byId('rules'),     ou=byId('outputs'), pl=byId('plugins'), sd=byId('sysdig');
+  ST.start    = wl.x0 + 4;
+  ST.driver   = dr.cx;
+  ST.ringIn   = rg.x0 + 1;
+  ST.ringOut  = rg.x1 - 1;
+  ST.state    = st.cx;
+  ST.rulesIn  = ru.x0 + 1;
+  ST.rulesOut = ru.x1 - 1;
+  ST.out      = ou.cx;
+  ST.end      = ou.x1 + 9;
+  ST.pluginX  = pl.x0;
+  ST.pluginZ  = pl.cz;
+  ST.joinZ    = -12;                       // where the bypass lane merges
+  ST.skyX     = sd.cx - 8;
+  ST.skyY     = sd.y + 2;
+  ST.skyZ     = sd.cz;
+})();
 
 /* ============================================================
    2. renderer / scene / camera
@@ -647,7 +768,7 @@ const camera = new THREE.PerspectiveCamera(38, Math.max(1,innerWidth)/Math.max(1
    so the whole syscall→alert flow stays in frame */
 const HOME_TGT = new THREE.Vector3(7, 4, -3);
 /* the whole city, including the floating Sysdig deck */
-const CITY_BOX = new THREE.Box3(new THREE.Vector3(-90,0,-62), new THREE.Vector3(102,44,44));
+const CITY_BOX = cityBox();
 const HOME_DIR = new THREE.Vector3(-0.40, 0.53, 0.75).normalize();
 
 /* Exact fit: push the camera back along HOME_DIR until every corner of CITY_BOX
@@ -821,13 +942,6 @@ const stateRefs  = { gantries:{} };
 /* west-end variants + the Sysdig Shield overlay, toggled by deploy / mode */
 const deployRefs = { wlK8s:null, wlHost:null, apiServer:null, clusterShield:null, hostShield:null };
 
-/* builder dispatch — BUILD_* are hoisted function declarations */
-const BUILD = {
-  workloads:BUILD_workloads, driver:BUILD_driver, ring:BUILD_ring,
-  state:BUILD_state, rules:BUILD_rules, outputs:BUILD_outputs,
-  plugins:BUILD_plugins, sysdig:BUILD_sysdig
-};
-
 const districtObjs = {};   // id -> {group, hit, anchor}
 const hitTargets = [];
 
@@ -851,7 +965,7 @@ DISTRICTS.forEach(d=>{
   );
   pOut.rotation.x = -Math.PI/2; pOut.position.set(cx, 0.04, cz); g.add(pOut);
 
-  BUILD[d.id](g, d, cx, cz);
+  d.build(g, d, cx, cz);
 
   /* invisible hover/click volume — kept tight so the floating Sysdig deck
      doesn't swallow clicks aimed at the districts below it */
@@ -879,7 +993,7 @@ function BUILD_workloads(g,d,cx,cz){
 
   /* ---------- variant A: Kubernetes — three node pads in a cluster ---------- */
   const k8s = new THREE.Group();
-  const NODE_Z = [-13, 0, 13];
+  const NODE_Z = [-d.d/3.2, 0, d.d/3.2];
   NODE_Z.forEach((nz, n)=>{
     const pad = box(24, 0.9, 10.4, C.g10, 0.95);
     put(pad, cx, 0.45, nz); k8s.add(pad);
@@ -975,8 +1089,9 @@ function BUILD_ring(g,d,cx,cz){
   // per-cpu lanes = troughs
   RING_LANES.length = 0;
   ringRefs.troughs.length = 0; ringRefs.walls.length = 0; ringRefs.caps.length = 0;
+  const laneSpan = d.d*0.74;
   for(let i=0;i<8;i++){
-    const z = -14 + i*4;
+    const z = -laneSpan/2 + i*(laneSpan/7);
     RING_LANES.push(z);
     const trough = box(d.x1-d.x0-1, 0.55, 2.5, C.g10, 0.95);
     put(trough, cx, 0.3, z); g.add(trough);
@@ -1133,6 +1248,33 @@ function BUILD_plugins(g,d,cx,cz){
     {color:'#A3A5A7', mono:true, opacity:0.9}));
 }
 
+function BUILD_falcoctl(g,d,cx,cz){
+  const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.9);
+  put(plat, cx, 0.36, cz); g.add(plat);
+
+  // the registry the artifacts come from
+  const reg = edged(3.6, 11, 3.6, C.g40, 0.7);
+  put(reg, d.x0+3.2, 0.7+5.5, cz); g.add(reg);
+  g.add(groundText('OCI registry', d.x0+0.8, d.z0+1.4, 1.4,
+    {color:'#8A8C8E', mono:true, opacity:0.95, y:0.75}));
+
+  // one crate per maturity level — only stable ships in the package
+  [['stable',0,C.lumin,5.5,0.95],['incubating',1,0xC9AEDA,4,0.7],['sandbox',2,C.g20,2.8,0.55]]
+    .forEach(([lbl,i,col,h,op])=>{
+      const b = edged(3.6, h, 4.2, col, op);
+      put(b, d.x0+9.4 + i*3.6, 0.7+h/2, cz); g.add(b);
+      g.add(groundText(lbl, d.x0+8.0 + i*3.6, d.z1-2.2, 1.25,
+        {color:'#8A8C8E', mono:true, opacity:0.9, y:0.75, rotZ:-Math.PI/2}));
+    });
+
+  // artifacts head south, into the rules engine
+  for(let i=0;i<3;i++) g.add(chevron(cx+2, d.z1+2 + i*3.2, 1.9, 0xC9AEDA, 0.4, -Math.PI/2));
+
+  g.add(groundText('falcoctl', cx-5, d.z0-3.4, 3.2, {color:'#C9AEDA', opacity:0.6}));
+  g.add(groundText('artifact install / follow → rules_files', d.x0, d.z0-6.6, 1.9,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
 function BUILD_sysdig(g,d,cx,cz){
   const w=d.x1-d.x0, dp=d.z1-d.z0;
   // deck
@@ -1179,7 +1321,9 @@ function BUILD_sysdig(g,d,cx,cz){
 (function shieldOverlay(){
   /* HOST SHIELD — a boundary drawn around driver → outputs */
   const hs = new THREE.Group();
-  const x0=-58, x1=86, z0=-24, z1=24, h=30;
+  const first = byId('driver'), last = byId('outputs');
+  const band = Math.max(...DISTRICTS.filter(isFlow).map(k=>k.d))/2 + 1;
+  const x0=first.x0-3, x1=last.x1+3, z0=-band, z1=band, h=30;
   const shell = new THREE.Mesh(
     new THREE.BoxGeometry(x1-x0, h, z1-z0),
     new THREE.MeshBasicMaterial({color:C.deepSee, transparent:true, opacity:0.035, depthWrite:false}));
@@ -1195,16 +1339,17 @@ function BUILD_sysdig(g,d,cx,cz){
   /* CLUSTER SHIELD — a Deployment, so exactly one of it, beside the cluster */
   const cs = new THREE.Group();
   const deck = box(15, 1.2, 13, C.deepSee, 0.94);
-  put(deck, -73, 0.6, -40); cs.add(deck);
+  const cp = byId('plugins');
+  put(deck, cp.cx+2, 0.6, cp.cz+4); cs.add(deck);
   const rim = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(15,1.2,13)), edgeMat(C.lumin, 0.8));
-  put(rim, -73, 0.6, -40); cs.add(rim);
+  put(rim, cp.cx+2, 0.6, cp.cz+4); cs.add(rim);
   [['admission',-4.6,-3.4,7],['audit',0.6,-3.4,5],
    ['posture',-4.6,3.4,6],['vuln mgmt',0.6,3.4,4.4]].forEach(([lbl,ox,oz,bh])=>{
     const b = box(4.2, bh, 4.6, C.lumin, 0.9);
-    put(b, -73+ox, 1.2+bh/2, -40+oz); cs.add(b);
+    put(b, cp.cx+2+ox, 1.2+bh/2, cp.cz+4+oz); cs.add(b);
   });
-  cs.add(groundText('CLUSTER SHIELD — cluster scoped (Deployment)', -84, -30.5, 2.1,
+  cs.add(groundText('CLUSTER SHIELD — cluster scoped (Deployment)', cp.cx-9, cp.z1+2.5, 2.1,
     {color:'#01353E', mono:true, opacity:0.9}));
   world.add(cs);
   deployRefs.clusterShield = cs;
@@ -1240,8 +1385,7 @@ const SET_MUL = { all:1.85, default:1.0, custom:0.40 };
 /* ============================================================
    8. event particle simulation
    ============================================================ */
-const X_START=-80, X_DRIVER=-48, X_RING_IN=-32, X_RING_OUT=-7,
-      X_STATE=14, X_RULES_IN=35, X_RULES_OUT=56, X_OUT=73, X_END=92;
+/* stage boundaries live in ST, derived from the layout (see section 1b) */
 
 const N = 1400;
 const pos = new Float32Array(N*3);
@@ -1259,7 +1403,7 @@ function setCol(i, hex, mul=1){
 
 function spawn(i, delay=0){
   const p = P[i] || (P[i]={});
-  p.x = X_START - Math.random()*10;
+  p.x = ST.start - Math.random()*10;
   p.z0 = (Math.random()-0.5)*30;
   p.z = p.z0;
   p.y = 3 + Math.random()*7;
@@ -1274,7 +1418,7 @@ function spawn(i, delay=0){
   /* kernel-less: every event comes in through a plugin */
   p.plugin = S.deploy === 'plugins' ? true : Math.random() < 0.03;
   if(p.plugin){
-    p.x = -84; p.z0 = -41 + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
+    p.x = ST.pluginX; p.z0 = ST.pluginZ + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
     /* plugin inputs bypass driver + ring buffer entirely */
     p.gated = true; p.dropRolled = true; p.enriched = true;
   }
@@ -1320,14 +1464,22 @@ scene.add(points);
 const PN = 200;
 const ppos = new Float32Array(PN*3), palp = new Float32Array(PN);
 const PP = [];
+/* Where rules come from. In OSS that is falcoctl pulling OCI artifacts; with
+   Sysdig it is managed policies descending from the backend. Same stream,
+   different source — which is exactly the point being made. */
 function spawnPolicy(i){
-  const toRules = Math.random() < 0.6;
+  const sysdigMode = S.mode === 'sysdig';
+  const src = byId(sysdigMode ? 'sysdig' : 'falcoctl');
+  const ru  = byId('rules'), dr = byId('driver');
+  /* only the Sysdig side also pushes config down to the driver */
+  const toRules = sysdigMode ? Math.random() < 0.6 : true;
   PP[i] = {
     t: -Math.random()*2,
     sp: 0.28 + Math.random()*0.2,
-    a:[75, 31, -41],
-    b: toRules ? [45+((Math.random()-0.5)*16), 27, -12+((Math.random()-0.5)*20)]
-               : [-48+((Math.random()-0.5)*8), 18, ((Math.random()-0.5)*30)]
+    a: [src.cx - 4, src.y + (sysdigMode ? 0 : 7), src.cz],
+    b: toRules
+      ? [ru.cx + (Math.random()-0.5)*16, ru.top + 1, ru.cz + (Math.random()-0.5)*20]
+      : [dr.cx + (Math.random()-0.5)*8,  dr.top,     (Math.random()-0.5)*30]
   };
   palp[i]=0;
 }
@@ -1407,11 +1559,10 @@ function step(dt){
     /* --- plugin bypass lane: straight to the rules engine --- */
     if(p.plugin && p.st===0){
       p.x += speed*dt*0.8;
-      const tz = -12;
-      if(p.x > -20) p.z += (tz - p.z)*Math.min(1,dt*1.1);
+      if(p.x > ST.state-30) p.z += (ST.joinZ - p.z)*Math.min(1,dt*1.1);
       p.y += ((6) - p.y)*Math.min(1,dt*2);
       alp[i] = 0.85;
-      if(p.x >= X_RULES_IN) p.plugin = false;   // joins the main match logic
+      if(p.x >= ST.rulesIn) p.plugin = false;   // joins the main match logic
       writeP(i,p); continue;
     }
 
@@ -1420,7 +1571,7 @@ function step(dt){
         p.x += speed*dt;
 
         /* kernel gate */
-        if(p.gated !== true && p.x >= X_DRIVER){
+        if(p.gated !== true && p.x >= ST.driver){
           p.gated = true;
           S.counters.sys++;
           /* base_syscalls decides how much the driver forwards at all */
@@ -1429,7 +1580,7 @@ function step(dt){
         }
 
         /* ring buffer: snap into a per-CPU lane */
-        if(p.x > X_RING_IN && p.x < X_RING_OUT){
+        if(p.x > ST.ringIn && p.x < ST.ringOut){
           p.z += (p.lane - p.z) * Math.min(1, dt*4.2);
           p.y += (2.6 - p.y) * Math.min(1, dt*4.2);
           if(p.dropRolled !== true){
@@ -1444,10 +1595,10 @@ function step(dt){
         }
 
         /* leaving the buffer → enrichment */
-        if(p.x > X_RING_OUT && p.x < X_STATE+8){
+        if(p.x > ST.ringOut && p.x < ST.state+8){
           p.z += (p.z0*0.6 - p.z) * Math.min(1, dt*1.6);
           p.y += (5.5 - p.y) * Math.min(1, dt*2.2);
-          if(p.enriched !== true && p.x > X_STATE){
+          if(p.enriched !== true && p.x > ST.state){
             p.enriched = true;
             setCol(i, C.falco);
             siz[i] *= 1.25;
@@ -1455,7 +1606,7 @@ function step(dt){
         }
 
         /* rules engine */
-        if(p.x >= X_RULES_IN && p.rolled !== true){
+        if(p.x >= ST.rulesIn && p.rolled !== true){
           p.rolled = true;
           S.counters.rules++;
           if(Math.random() < MATCH_RATE){
@@ -1470,7 +1621,7 @@ function step(dt){
             p.st = 3; p.fade = 1;               // no match → evaporates
           }
         }
-        alp[i] = p.x < X_DRIVER ? 0.5 : 0.85;
+        alp[i] = p.x < ST.driver ? 0.5 : 0.85;
         break;
       }
       case 1: {                                 // dropped
@@ -1484,18 +1635,18 @@ function step(dt){
       }
       case 2: {                                 // matched alert
         p.x += speed*dt*0.85;
-        if(p.x > X_RULES_OUT && p.x < X_OUT+8){
+        if(p.x > ST.rulesOut && p.x < ST.out+8){
           const tz = OUT_PIPES.length ? OUT_PIPES[p.prio % OUT_PIPES.length] : 0;
           p.z += (tz - p.z)*Math.min(1,dt*2.4);
           p.y += (3.4 - p.y)*Math.min(1,dt*2.4);
         }
-        if(S.mode==='sysdig' && p.x > X_OUT+4){
+        if(S.mode==='sysdig' && p.x > ST.out+4){
           // climb to the platform
-          p.z += (-41 - p.z)*Math.min(1,dt*0.85);
-          p.y += (33 - p.y)*Math.min(1,dt*1.05);
-          p.x += (78 - p.x)*Math.min(1,dt*0.5);
-          if(p.y > 30 && Math.abs(p.x-78) < 6){ p.st=3; p.fade=1; }
-        } else if(p.x > X_END){ p.st=3; p.fade=1; }
+          p.z += (ST.skyZ - p.z)*Math.min(1,dt*0.85);
+          p.y += (ST.skyY+2 - p.y)*Math.min(1,dt*1.05);
+          p.x += (ST.skyX - p.x)*Math.min(1,dt*0.5);
+          if(p.y > ST.skyY && Math.abs(p.x-ST.skyX) < 6){ p.st=3; p.fade=1; }
+        } else if(p.x > ST.end){ p.st=3; p.fade=1; }
         alp[i]=0.98;
         break;
       }
@@ -1514,8 +1665,8 @@ function step(dt){
   pg.attributes.alpha.needsUpdate = true;
   pg.attributes.size.needsUpdate = true;
 
-  /* policy downlink */
-  const showPolicy = S.mode === 'sysdig';
+  /* rule / policy stream — always running, only the source differs */
+  const showPolicy = true;
   polPoints.visible = showPolicy;
   if(showPolicy){
     for(let i=0;i<PN;i++){
@@ -1834,6 +1985,9 @@ function setMode(m){
     b.classList.toggle('on', b.dataset.mode===m));
   document.getElementById('ctitle').textContent = consoleTitle();
   setDim(sysdigGroup, m==='sysdig' ? 1 : 0.16);
+  /* the rule stream changes both source and colour with the stack */
+  polMat.uniforms.uColor.value.setHex(m==='sysdig' ? C.lumin : 0xC9AEDA);
+  for(let i=0;i<PN;i++) spawnPolicy(i);
   applyShield();
 }
 
@@ -2002,14 +2156,12 @@ addEventListener('keydown', e=>{
 const mm = document.getElementById('mmc');
 const mctx = mm.getContext('2d');
 const MM_W = mm.width, MM_H = mm.height;
-const MM = {x0:-100, x1:110, z0:-70, z1:60};
+const MM = {x0:CITY_BOX.min.x-8, x1:CITY_BOX.max.x+8, z0:CITY_BOX.min.z-8, z1:CITY_BOX.max.z+8};
 function mx(x){ return (x-MM.x0)/(MM.x1-MM.x0)*MM_W; }
 function mz(z){ return (z-MM.z0)/(MM.z1-MM.z0)*MM_H; }
 
-const MM_FILL = {
-  workloads:'#BBBDBF', driver:'#00CBE2', ring:'#8A8C8E', state:'#9AD9E8',
-  rules:'#CA87DA', outputs:'#BDF78B', plugins:'#F3C99A', sysdig:'#01353E'
-};
+/* colours follow each district's own `color` — no second list to maintain */
+const MM_FILL = Object.fromEntries(DISTRICTS.map(d => [d.id, hex6(d.color)]));
 function drawMinimap(){
   mctx.clearRect(0,0,MM_W,MM_H);
   mctx.fillStyle = '#FAFBFB'; mctx.fillRect(0,0,MM_W,MM_H);

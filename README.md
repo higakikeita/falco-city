@@ -52,8 +52,9 @@ python3 -m http.server 8722
 | 06 | 出力チャネル | stdout / gRPC / Falcosidekick → Falco Talon |
 | 07 | プラグイン入力 | `k8saudit` / `cloudtrail` / `okta` 等。ドライバもバッファも通らないバイパス車線 |
 | 08 | Sysdig Secure | 同じ libs・同じ Falco エンジン。ポリシーが降り、イベント・キャプチャが上がる |
+| 09 | ルール配布 | `falcoctl`。ルールとプラグインは OCI アーティファクトとして配られる |
 
-地区をクリックすると詳細パネル（日本語の解説＋要点バンド）が開く。キーボード `1`–`8` でも移動、`0` で全体、`Esc` で閉じる。
+地区をクリックすると詳細パネル（日本語の解説＋要点バンド）が開く。キーボード `1`–`9` でも移動、`0` で全体、`Esc` で閉じる。
 
 ## 操作
 
@@ -127,6 +128,60 @@ HUD の `drain utilisation` と判定バンドが、いまどちらの状態か�
 
 ドロップが続くとエージェントが停止する。停止中は**リングバッファ流入 0・アラート 0** で、検知が本当にゼロになる（`ignore` は「黙って盲目になる」ことを選ぶのと同じ、という対比）。負荷か設定を変えると再起動する。
 
+## 地区を足す
+
+座標を手で決める必要はない。`DISTRICTS` に1つ宣言して、ビルダー関数を1つ書くだけ。
+レイアウトエンジン（`layout()`）が位置を割り当て、そこから下流が全部追随する
+— カメラのフィット、ミニマップの枠と色、ツアーのボタン、キーボードショートカット、
+パーティクルの通過座標、Shield オーバーレイの範囲。**他の数字を触る必要はない。**
+
+```js
+{
+  id:'falcoctl', n:'09', tag:'RULE DISTRIBUTION',
+  jp:'ルール配布', en:'falcoctl — oci artifacts',
+  build:BUILD_falcoctl,                 // ビルダー関数
+  w:20, d:16, top:14,                   // 必要な広さ（x × z）と高さ
+  lane:'north', after:'rules', dx:-4,   // どこに置くか
+  color:0xC9AEDA,                       // ミニマップの色もここから引かれる
+  hoverT:'...', hoverS:'...', hoverM:['...'],
+  metrics:[['見出し','値']],
+  body:`<h3>...</h3>`                   // 詳細パネルの中身
+}
+```
+
+| フィールド | 意味 |
+|---|---|
+| `lane` | `'flow'`（既定）= syscall→alert の軸上に西から東へ順に並ぶ / `'north'` = 流れの背後（−z）/ `'south'` = 手前（+z） |
+| `after` | `north` / `south` のとき、どの地区に横位置を合わせるか |
+| `dx` | `after` からの x のずれ |
+| `y` | 高さ。上空に浮かせるデッキ用（Sysdig Secure が `y:31`） |
+| `w` / `d` / `top` | x 幅 / z 奥行き / 高さ。当たり判定とカメラの導出に使われる |
+| `cam` | 省略可。省略すると `w` / `d` / `top` から妥当な3/4ビューが導出される |
+
+ビルダーは `(group, d, cx, cz)` を受け取る。`d.x0` / `d.x1` / `d.z0` / `d.z1` は
+レイアウト後の実座標なので、**中身は必ず相対で書く**（絶対座標を書くと地区を挿入した
+ときに崩れる）。使えるヘルパー: `box()` / `edged()` / `put()` / `groundText()` /
+`chevron()`（ブランド正式形状）。
+
+流れの軸（`lane:'flow'`）に新しい段を挿入した場合だけ、パーティクルの振る舞いを
+`ST`（`index.html` の 1b 節）に足す必要がある。annex（`north` / `south`）なら不要。
+
+### 09 ルール配布 について
+
+追加の実例として入れてある。「Falco の既定ルールは思ったより少ない」の答えがここ。
+
+- ルールとプラグインは **OCI アーティファクト**としてレジストリから配られ、`falcoctl` が取得・更新する
+- 成熟度は **Stable / Incubating / Sandbox**（＋Deprecated）。**リリースパッケージに同梱されるのは Stable のみ**で、他は別途インストールが必要
+- Helm の3キーは別物 — `falcoctl.config.artifact.install.refs`（取得）/ `falcoctl.config.artifact.follow.refs`（自動更新）/ `falco.rules_files`（読み込み）。揃っていないと「入れたはずのルールが効かない」が起きる
+
+STACK を `+ Sysdig` に切り替えると、ルールの流れの出どころがこの地区から上空の
+プラットフォームに移る（マネージドルールが降りてくる）。同じ流れで出どころだけが違う、
+という対比になっている。
+
+出典: [Falco Default Rules](https://falco.org/docs/reference/rules/default-rules/) /
+[Adoption of Falco Rules in Production](https://falco.org/docs/concepts/rules/adoption-rules/) /
+[falcosecurity/rules](https://github.com/falcosecurity/rules)
+
 ## パーティクルの色
 
 | 色 | 意味 |
@@ -136,7 +191,8 @@ HUD の `drain utilisation` と判定バンドが、いまどちらの状態か�
 | オレンジ | プラグイン入力（k8s audit / cloudtrail …） |
 | 赤 | ドロップ（バッファ溢れ） |
 | 紫・赤・橙・青 | ルールマッチ → priority 別のアラート |
-| Lumin | Sysdig からのポリシー／応答 |
+| 薄紫（降下） | falcoctl が配るルール（OSS） |
+| Lumin（降下） | Sysdig から降りるポリシー／応答 |
 
 ## 数値について
 
