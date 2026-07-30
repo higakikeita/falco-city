@@ -1,0 +1,14 @@
+{
+  "name": "falco-city",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Falco / Sysdig runtime security pipeline as a walkable 3D city",
+  "scripts": {
+    "bundle": "esbuild three-entry.js --bundle --format=iife --global-name=THREEBUNDLE --minify --legal-comments=none --outfile=three-bundle.js",
+    "build": "npm run bundle && node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "three": "0.160.0"
+  }
+}

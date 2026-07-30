@@ -1,0 +1,1712 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Falco / Sysdig — Runtime Security City</title>
+<script>window.__errs=[];addEventListener('error',e=>window.__errs.push((e.message||e.type)+' @'+(e.filename||'')+':'+e.lineno+':'+e.colno));addEventListener('unhandledrejection',e=>window.__errs.push('rej: '+e.reason));</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   Sysdig 2026 brand tokens
+   ============================================================ */
+:root{
+  --lumin:#BDF78B; --white:#FFFFFF; --black:#000000; --deep-see:#01353E;
+  --grey-10:#EAEBED; --grey-20:#BBBDBF; --grey-25:#A3A5A7; --grey-30:#8A8C8E;
+  --grey-40:#626466; --grey-50:#535557; --grey-60:#3E4042; --grey-70:#2B2D30;
+  --grey-80:#1E1E22; --grey-90:#121217;
+  --falco-blue:#00CBE2; --yellow:#FDD835; --orange:#FFA940;
+  --red:#FF7774; --red-ui:#EA5255; --purple:#CA87DA;
+  --font-display:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;
+  --font-mono:'Share Tech Mono',ui-monospace,Menlo,monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--font-display);
+  -webkit-font-smoothing:antialiased;
+  color:var(--black); background:#F7F8F8;
+}
+canvas{display:block}
+#app{position:fixed;inset:0}
+
+/* ============================================================
+   Overlay scaffolding
+   ============================================================ */
+.ui{position:fixed;z-index:10}
+.ui,.ui *{pointer-events:none}
+.ui.interactive,.ui.interactive *{pointer-events:auto}
+
+.panel{
+  background:rgba(255,255,255,.94);
+  border:1px solid var(--grey-10);
+  border-radius:14px;
+  box-shadow:0 10px 40px rgba(0,0,0,.07);
+  backdrop-filter:blur(6px);
+}
+
+/* ---------- top-left: identity + mode ---------- */
+#topLeft{top:20px;left:20px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.brandbar{display:flex;align-items:center;gap:14px;padding:12px 18px}
+.brandbar svg{display:block;height:15px;width:auto;color:var(--black)}
+.brandbar .div{width:1px;height:22px;background:var(--grey-10)}
+.brandbar .ttl{font-size:13px;font-weight:600;letter-spacing:.01em}
+.brandbar .sub{font-family:var(--font-mono);font-size:10.5px;color:var(--grey-30);
+  text-transform:uppercase;letter-spacing:.13em;margin-top:1px}
+
+.segwrap{display:flex;gap:8px;flex-wrap:wrap}
+.seg{display:flex;padding:4px;gap:3px;border-radius:11px}
+.seg button{
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  border:0;background:transparent;color:var(--grey-40);padding:6px 11px;border-radius:8px;
+  cursor:pointer;transition:.16s;white-space:nowrap
+}
+.seg button:hover{background:var(--grey-10);color:var(--black)}
+.seg button.on{background:var(--lumin);color:var(--black)}
+.seg .caplbl{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-25);
+  letter-spacing:.14em;padding:7px 8px 7px 10px;text-transform:uppercase}
+
+/* ---------- top-right: legend + hud ---------- */
+#topRight{top:20px;right:20px;width:252px;display:flex;flex-direction:column;gap:10px}
+.hud{padding:14px 16px}
+.hud h4{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
+  color:var(--grey-25);text-transform:uppercase;margin-bottom:10px}
+.hudrow{display:flex;justify-content:space-between;align-items:baseline;
+  font-family:var(--font-mono);font-size:11.5px;padding:2.5px 0}
+.hudrow span:first-child{color:var(--grey-40)}
+.hudrow b{font-weight:400;font-variant-numeric:tabular-nums}
+.hudrow b.blue{color:#00A8BC}
+.hudrow b.red{color:var(--red-ui)}
+.hudrow b.dark{color:var(--black)}
+
+.legend{padding:14px 16px}
+.lgrow{display:flex;align-items:center;gap:9px;font-family:var(--font-mono);
+  font-size:10.5px;color:var(--grey-40);padding:3px 0}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 0 1px rgba(0,0,0,.06)}
+
+.slider{padding:13px 16px 15px}
+.slider label{display:flex;justify-content:space-between;font-family:var(--font-mono);
+  font-size:9.5px;letter-spacing:.14em;color:var(--grey-25);text-transform:uppercase;margin-bottom:9px}
+.slider label b{color:var(--black);font-weight:400}
+input[type=range]{-webkit-appearance:none;width:100%;height:3px;background:var(--grey-10);
+  border-radius:3px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;
+  border-radius:50%;background:var(--black);cursor:pointer;border:2px solid #fff;
+  box-shadow:0 1px 5px rgba(0,0,0,.25)}
+
+/* ---------- hover card (reference style) ---------- */
+#hoverCard{
+  position:fixed;z-index:20;pointer-events:none;opacity:0;
+  transition:opacity .13s;max-width:340px;
+  background:rgba(255,255,255,.97);border-radius:5px;
+  box-shadow:0 6px 26px rgba(0,0,0,.13);padding:11px 15px 12px
+}
+#hoverCard.show{opacity:1}
+#hoverCard .hc-top{display:flex;justify-content:space-between;gap:16px;align-items:baseline}
+#hoverCard .hc-t{font-family:var(--font-display);font-size:12.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--black)}
+#hoverCard .hc-n{font-family:var(--font-mono);font-size:11px;color:#00A8BC}
+#hoverCard .hc-s{font-size:11.5px;color:var(--grey-40);margin-top:4px;line-height:1.5}
+#hoverCard .hc-m{font-family:var(--font-mono);font-size:11px;color:#00A8BC;
+  margin-top:7px;line-height:1.65;text-align:right}
+
+/* ---------- 3D-anchored district labels ---------- */
+.tag{
+  position:fixed;z-index:12;transform:translate(-50%,-50%);
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;
+  padding:4px 9px;border-radius:3px;white-space:nowrap;
+  background:rgba(62,64,66,.82);color:#fff;transition:opacity .2s,background .2s;
+  pointer-events:none
+}
+.tag.dim{background:rgba(139,141,143,.5)}
+.tag.hot{background:var(--lumin);color:var(--black)}
+.tag .cnt{color:var(--lumin);margin-left:7px}
+.tag.hot .cnt{color:var(--grey-50)}
+
+/* ---------- bottom-left minimap ---------- */
+#minimap{bottom:20px;left:20px;padding:11px}
+#minimap canvas{border-radius:6px;display:block}
+#minimap .mmcap{display:flex;justify-content:space-between;
+  font-family:var(--font-mono);font-size:9px;color:var(--grey-25);
+  letter-spacing:.16em;padding:0 2px 7px}
+
+/* ---------- bottom-center tour ---------- */
+#tour{bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:6px;
+  padding:7px;border-radius:13px;max-width:min(900px,72vw);flex-wrap:wrap;justify-content:center}
+#tour button{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  border:0;background:transparent;color:var(--grey-40);padding:7px 10px;border-radius:8px;
+  cursor:pointer;transition:.16s;display:flex;align-items:center;gap:7px;white-space:nowrap
+}
+#tour button:hover{background:var(--grey-10);color:var(--black)}
+#tour button.on{background:var(--deep-see);color:#fff}
+#tour button .n{font-size:9px;color:var(--grey-25)}
+#tour button.on .n{color:var(--lumin)}
+
+/* ---------- console ---------- */
+#consoleWrap{bottom:20px;right:20px;width:470px;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+#consoleBox{width:100%;background:var(--grey-90);border-radius:12px;overflow:hidden;
+  box-shadow:0 14px 46px rgba(0,0,0,.3);display:none}
+#consoleBox.open{display:block}
+.cbar{display:flex;align-items:center;gap:7px;padding:9px 13px;background:#0B0B0F;
+  border-bottom:1px solid rgba(255,255,255,.06)}
+.cbar .l{width:9px;height:9px;border-radius:50%}
+.cbar .t{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-30);
+  letter-spacing:.13em;margin-left:8px;text-transform:uppercase}
+#clog{height:186px;overflow:hidden;padding:9px 13px 11px;
+  font-family:var(--font-mono);font-size:10.5px;line-height:1.62;color:var(--grey-30);
+  display:flex;flex-direction:column;justify-content:flex-end}
+#clog div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#clog .ts{color:var(--grey-50)}
+#clog .p-crit{color:var(--purple)}
+#clog .p-warn{color:var(--orange)}
+#clog .p-err{color:var(--red-ui)}
+#clog .p-note{color:var(--falco-blue)}
+#clog .kv{color:var(--grey-40)}
+#clog .sys{color:var(--lumin)}
+.cbtn{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+  border:1px solid var(--grey-10);background:rgba(255,255,255,.94);color:var(--grey-40);
+  padding:9px 14px;border-radius:10px;cursor:pointer;transition:.16s;
+  box-shadow:0 8px 28px rgba(0,0,0,.07);display:flex;align-items:center;gap:8px
+}
+.cbtn:hover{color:var(--black);border-color:var(--grey-20)}
+.cbtn .pulse{width:7px;height:7px;border-radius:50%;background:var(--red-ui);
+  animation:pulse 1.7s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ---------- detail drawer ---------- */
+#drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(470px,42vw);z-index:30;
+  background:#fff;box-shadow:-16px 0 60px rgba(0,0,0,.13);
+  transform:translateX(101%);transition:transform .38s cubic-bezier(.4,0,.2,1);
+  display:flex;flex-direction:column;pointer-events:auto
+}
+#drawer.open{transform:none}
+.dhead{padding:26px 30px 20px;border-bottom:1px solid var(--grey-10);position:relative}
+.dhead .eyebrow{font-family:var(--font-mono);font-size:10px;letter-spacing:.18em;
+  color:var(--grey-30);text-transform:uppercase}
+.dhead h2{font-family:var(--font-display);font-weight:300;font-size:31px;line-height:1.2;
+  margin-top:9px;text-wrap:balance}
+.dhead .en{font-family:var(--font-mono);font-size:11px;color:var(--grey-30);
+  letter-spacing:.1em;margin-top:7px;text-transform:uppercase}
+#dclose{position:absolute;top:22px;right:24px;width:30px;height:30px;border:0;
+  background:var(--grey-10);border-radius:50%;cursor:pointer;color:var(--grey-40);
+  font-size:15px;line-height:1;transition:.16s}
+#dclose:hover{background:var(--grey-20);color:#000}
+.dbody{padding:24px 30px 30px;overflow-y:auto;flex:1;font-size:14px;line-height:1.85}
+.dbody h3{font-family:var(--font-display);font-size:12px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--grey-40);margin:24px 0 10px;
+  display:flex;align-items:center;gap:9px}
+.dbody h3:first-child{margin-top:0}
+.dbody h3::before{content:'';width:12px;height:2px;background:var(--lumin);flex:none}
+.dbody p{margin-bottom:13px;color:var(--grey-50)}
+.dbody strong{color:var(--black);font-weight:600}
+.dbody ul{list-style:none;margin:0 0 14px}
+.dbody li{position:relative;padding-left:19px;margin-bottom:8px;color:var(--grey-50)}
+.dbody li::before{content:'›';position:absolute;left:3px;top:-1px;color:var(--grey-20);
+  font-size:15px;font-weight:600}
+.dbody code{font-family:var(--font-mono);font-size:12.5px;background:var(--grey-10);
+  padding:1.5px 5px;border-radius:3px;color:var(--grey-70);white-space:nowrap}
+.mark{background:var(--lumin);color:#000;padding:0 4px;border-radius:2px;font-weight:600}
+.takeaway{background:var(--deep-see);color:#fff;border-radius:10px;padding:15px 20px;
+  font-weight:500;font-size:13.5px;line-height:1.7;margin-top:26px}
+.takeaway .cv{color:var(--lumin);margin-right:9px;font-weight:700}
+.metrics{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 18px}
+.metric{background:var(--grey-10);border-radius:9px;padding:9px 13px;flex:1 1 auto}
+.metric .k{font-family:var(--font-mono);font-size:9px;letter-spacing:.13em;
+  color:var(--grey-30);text-transform:uppercase}
+.metric .v{font-family:var(--font-mono);font-size:15px;color:var(--black);margin-top:3px}
+
+/* ---------- loader ---------- */
+#loader{position:fixed;inset:0;z-index:60;background:#F7F8F8;display:flex;
+  align-items:center;justify-content:center;flex-direction:column;gap:18px;
+  transition:opacity .5s}
+#loader.gone{opacity:0;pointer-events:none}
+#loader .lt{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;
+  color:var(--grey-30);text-transform:uppercase}
+#loader .bar{width:190px;height:2px;background:var(--grey-10);overflow:hidden;border-radius:2px}
+#loader .bar i{display:block;height:100%;width:40%;background:var(--lumin);
+  animation:sweep 1.15s infinite ease-in-out}
+@keyframes sweep{0%{transform:translateX(-105%)}100%{transform:translateX(255%)}}
+
+#hint{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:11;
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.15em;color:var(--grey-25);
+  text-transform:uppercase;transition:opacity .6s;pointer-events:none}
+#hint.gone{opacity:0}
+
+@media (max-width:1180px){
+  #consoleWrap{width:360px}
+  #topRight{width:222px}
+  #tour{max-width:88vw}
+}
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<!-- ================= overlays ================= -->
+<div class="ui interactive" id="topLeft">
+  <div class="panel brandbar">
+    <!-- sysdig wordmark — official asset, fill=currentColor -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 187" role="img" aria-label="Sysdig">
+      <g transform="matrix(1,0,0,1,0,-19)"><g transform="matrix(2.17273,0,0,1.57142,51.4649,47.2017)"><g transform="matrix(1.406,0,0,1.94401,-100.713,-73.9948)">
+        <path d="M98.358,65.739C98.517,68.39 97.361,70.956 95.271,72.594C93.043,74.164 90.351,74.938 87.63,74.792C83.25,74.81 78.996,73.311 75.594,70.553L78.996,65.32C82.065,67.553 85.013,68.669 87.84,68.669C90.072,68.669 91.188,67.971 91.189,66.576L91.189,66.471C91.189,65.704 90.613,65.059 89.462,64.535C89.043,64.361 87.683,63.925 85.38,63.227C79.798,61.587 77.007,58.779 77.007,54.802L77.007,54.697C76.915,52.144 78.043,49.693 80.042,48.103C82.103,46.51 84.661,45.694 87.264,45.801C91.001,45.791 94.653,46.924 97.73,49.045L94.695,54.54C91.729,52.796 89.2,51.924 87.107,51.923C85.153,51.923 84.176,52.569 84.176,53.859L84.176,53.964C84.176,54.663 84.752,55.291 85.903,55.848C86.356,56.057 87.682,56.546 89.881,57.313C91.912,57.916 93.837,58.835 95.584,60.035C97.355,61.344 98.389,63.431 98.358,65.634L98.358,65.739ZM117.701,74.949C116.619,77.844 115.415,79.868 114.09,81.019C112.501,82.27 110.51,82.902 108.491,82.798C106.004,82.805 103.562,82.136 101.426,80.862L104.095,75.106C105.108,75.774 106.284,76.153 107.496,76.205C108.709,76.231 109.818,75.499 110.27,74.373L99.281,46.219L107.706,46.219L114.09,65.32L120.213,46.219L128.481,46.219L117.701,74.949ZM150.889,65.739C151.048,68.39 149.892,70.956 147.802,72.594C145.575,74.164 142.882,74.938 140.162,74.792C135.782,74.81 131.528,73.311 128.126,70.553L131.527,65.32C134.597,67.553 137.545,68.669 140.371,68.669C142.603,68.669 143.72,67.971 143.72,66.576L143.72,66.471C143.72,65.704 143.144,65.059 141.993,64.535C141.574,64.361 140.214,63.925 137.911,63.227C132.329,61.587 129.538,58.779 129.539,54.802L129.539,54.697C129.446,52.144 130.574,49.693 132.574,48.103C134.634,46.51 137.193,45.694 139.795,45.801C143.532,45.791 147.185,46.924 150.261,49.045L147.226,54.54C144.26,52.796 141.731,51.924 139.638,51.923C137.684,51.923 136.707,52.569 136.708,53.859L136.708,53.964C136.708,54.663 137.283,55.291 138.435,55.848C138.888,56.057 140.213,56.546 142.412,57.313C144.444,57.916 146.369,58.835 148.116,60.034C149.887,61.344 150.921,63.432 150.889,65.634L150.889,65.739ZM175.16,74.269L175.16,71.809C172.728,73.868 169.605,74.934 166.421,74.792C163.083,74.855 159.869,73.504 157.577,71.076C154.961,68.355 153.653,64.762 153.653,60.296L153.653,60.191C153.653,55.726 154.943,52.133 157.525,49.412C159.833,46.977 163.066,45.626 166.421,45.696C169.542,45.584 172.615,46.504 175.16,48.313L175.16,36.067L183.115,36.067L183.115,74.269L175.16,74.269ZM175.265,60.192C175.343,58.14 174.631,56.135 173.277,54.592C172.07,53.2 170.304,52.413 168.462,52.447C166.63,52.409 164.87,53.175 163.648,54.54C162.257,56.085 161.525,58.114 161.607,60.191L161.607,60.296C161.531,62.357 162.263,64.368 163.648,65.896C164.875,67.261 166.627,68.041 168.462,68.041C170.298,68.041 172.049,67.261 173.277,65.896C174.631,64.353 175.343,62.348 175.265,60.296L175.265,60.192ZM187.929,43.132L187.929,36.067L196.302,36.067L196.302,43.132L187.929,43.132ZM188.138,74.269L188.138,46.22L196.093,46.22L196.093,74.269L188.138,74.269ZM230.382,67.937C230.382,73.135 229.074,76.921 226.457,79.292C223.945,81.595 220.038,82.746 214.735,82.746C210.423,82.808 206.162,81.801 202.333,79.816L205.054,73.327C207.933,74.994 211.199,75.878 214.526,75.891C219.864,75.891 222.532,73.693 222.533,69.297L222.533,68.983C219.917,71.006 216.68,72.061 213.375,71.966C210.14,72.052 207.004,70.824 204.688,68.565C202.131,66.01 200.762,62.494 200.92,58.883L200.92,58.779C200.764,55.158 202.154,51.636 204.74,49.098C207.04,46.845 210.157,45.617 213.375,45.696C216.589,45.616 219.751,46.53 222.428,48.313L222.428,46.22L230.382,46.22L230.382,67.937ZM222.533,58.779C222.582,57.011 221.854,55.308 220.544,54.121C217.772,51.691 213.583,51.691 210.811,54.121C209.528,55.323 208.822,57.021 208.874,58.779L208.874,58.883C208.814,60.657 209.52,62.374 210.811,63.593C212.14,64.794 213.886,65.433 215.677,65.372C217.477,65.43 219.229,64.771 220.544,63.541C221.855,62.354 222.582,60.651 222.533,58.883L222.533,58.779Z" fill="currentColor" fill-rule="nonzero"/>
+      </g></g></g>
+    </svg>
+    <div class="div"></div>
+    <div>
+      <div class="ttl">Runtime Security City</div>
+      <div class="sub">syscall → alert · walkable model</div>
+    </div>
+  </div>
+
+  <div class="segwrap">
+    <div class="panel seg" id="modeSeg">
+      <span class="caplbl">stack</span>
+      <button data-mode="oss" class="on">Falco OSS</button>
+      <button data-mode="sysdig">+ Sysdig</button>
+    </div>
+    <div class="panel seg" id="drvSeg">
+      <span class="caplbl">driver</span>
+      <button data-drv="modern_ebpf" class="on">modern_ebpf</button>
+      <button data-drv="ebpf">ebpf</button>
+      <button data-drv="kmod">kmod</button>
+    </div>
+  </div>
+</div>
+
+<div class="ui interactive" id="topRight">
+  <div class="panel hud">
+    <h4>live pipeline · illustrative</h4>
+    <div class="hudrow"><span>syscalls / s</span><b class="dark" id="mSys">—</b></div>
+    <div class="hudrow"><span>to ring buffer</span><b class="blue" id="mRing">—</b></div>
+    <div class="hudrow"><span>event drops</span><b class="red" id="mDrop">—</b></div>
+    <div class="hudrow"><span>rules evaluated</span><b class="dark" id="mRules">—</b></div>
+    <div class="hudrow"><span>alerts / min</span><b class="dark" id="mAlert">—</b></div>
+  </div>
+
+  <div class="panel slider">
+    <label>node load <b id="loadVal">×1.0</b></label>
+    <input type="range" id="loadRange" min="20" max="320" value="100">
+  </div>
+
+  <div class="panel legend">
+    <h4 style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.16em;color:var(--grey-25);text-transform:uppercase;margin-bottom:10px">legend</h4>
+    <div class="lgrow"><i class="dot" style="background:#BBBDBF"></i>raw syscall</div>
+    <div class="lgrow"><i class="dot" style="background:#00CBE2"></i>enriched event</div>
+    <div class="lgrow"><i class="dot" style="background:#EA5255"></i>dropped (buffer full)</div>
+    <div class="lgrow"><i class="dot" style="background:#CA87DA"></i>rule match → alert</div>
+    <div class="lgrow"><i class="dot" style="background:#BDF78B"></i>policy / response (Sysdig)</div>
+  </div>
+</div>
+
+<div class="ui interactive panel" id="minimap">
+  <div class="mmcap"><span>PLAN</span><span>ORBIT</span></div>
+  <canvas id="mmc" width="286" height="184"></canvas>
+</div>
+
+<div class="ui interactive panel" id="tour"></div>
+
+<div class="ui interactive" id="consoleWrap">
+  <div class="panel" id="consoleBox" style="padding:0;border:0">
+    <div class="cbar">
+      <i class="l" style="background:#FF5F57"></i><i class="l" style="background:#FEBC2E"></i><i class="l" style="background:#28C840"></i>
+      <span class="t" id="ctitle">falco -o json_output=false</span>
+    </div>
+    <div id="clog"></div>
+  </div>
+  <button class="cbtn" id="ctoggle"><i class="pulse"></i><span>Console</span></button>
+</div>
+
+<div id="hoverCard">
+  <div class="hc-top"><span class="hc-t"></span><span class="hc-n"></span></div>
+  <div class="hc-s"></div>
+  <div class="hc-m"></div>
+</div>
+
+<div id="drawer">
+  <div class="dhead">
+    <div class="eyebrow" id="dEyebrow">stage 01</div>
+    <h2 id="dTitle">—</h2>
+    <div class="en" id="dEn">—</div>
+    <button id="dclose">✕</button>
+  </div>
+  <div class="dbody" id="dBody"></div>
+</div>
+
+<div id="hint">drag to orbit · scroll to zoom · click a district</div>
+
+<div id="loader">
+  <div class="lt">building the city</div>
+  <div class="bar"><i></i></div>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   0. palette
+   ============================================================ */
+const C = {
+  lumin:0xBDF78B, white:0xFFFFFF, black:0x000000, deepSee:0x01353E,
+  g10:0xEAEBED, g20:0xBBBDBF, g25:0xA3A5A7, g30:0x8A8C8E, g40:0x626466,
+  g50:0x535557, g60:0x3E4042, g70:0x2B2D30, g90:0x121217,
+  falco:0x00CBE2, yellow:0xFDD835, orange:0xFFA940, red:0xFF7774,
+  redUi:0xEA5255, purple:0xCA87DA
+};
+
+/* ============================================================
+   1. district model  (flow runs along +X)
+   ============================================================ */
+const DISTRICTS = [
+  {
+    id:'workloads', n:'01', tag:'WORKLOADS',
+    hoverT:'WORKLOADS / PROCESSES', hoverS:'コンテナ・Pod・ホストのプロセス — すべての起点',
+    hoverM:['execve · openat · connect · ptrace','~80 interesting syscalls'],
+    jp:'ワークロード', en:'workloads / processes',
+    x0:-84,x1:-62,z0:-19,z1:19, top:15, color:C.g20, cam:[-118,42,58],
+    metrics:[['観測対象','syscall + 一部の非 syscall'],['改造','アプリ変更ゼロ']],
+    body:`
+<h3>ここで何が起きているか</h3>
+<p>コンテナ・Pod・ホスト上のプロセスが動くと、必ず <strong>システムコール</strong> が発行される。ファイルを開く <code>openat</code>、プロセスを起こす <code>execve</code>、外に繋ぐ <code>connect</code>、他プロセスを覗く <code>ptrace</code> — アプリが何をしようとしても、最後はカーネルに頼むしかない。</p>
+<p>Falco がここを起点に選ぶ理由は単純で、<span class="mark">カーネルの境界は誰も迂回できない</span>から。言語もフレームワークもベースイメージも問わない。サイドカーも SDK も不要。</p>
+<h3>ここでの設計上のポイント</h3>
+<ul>
+<li>アプリに手を入れない = 開発チームへの依存がゼロ。だから「あとから全ワークロードに」入れられる</li>
+<li>見えるのは <em>振る舞い</em>。「脆弱性があるか」ではなく「実際に何をしたか」</li>
+<li>ホストのプロセスもコンテナ外のプロセスも同じ経路で見える。Kubernetes だけの話ではない</li>
+</ul>
+<div class="takeaway"><span class="cv">▸</span>すべての検知は「カーネルに頼んだ事実」から始まる。だから逃げ道がない。</div>`
+  },
+  {
+    id:'driver', n:'02', tag:'DRIVER (KERNEL)',
+    hoverT:'DRIVER — KERNEL SPACE', hoverS:'tracepoint にアタッチし、関心のある syscall だけを通す門',
+    hoverM:['modern_ebpf · ebpf · kmod','kernel-side filter = 最も安いフィルタ'],
+    jp:'ドライバ（カーネル空間）', en:'driver — modern_ebpf / ebpf / kmod',
+    x0:-55,x1:-42,z0:-23,z1:23, top:18, color:C.falco, cam:[-88,40,62],
+    metrics:[['既定','modern_ebpf (CO-RE)'],['要件','kernel ≥ 5.8']],
+    body:`
+<h3>3つの目のうち、どれを使うか</h3>
+<ul>
+<li><code>modern_ebpf</code> — CO-RE eBPF。カーネル 5.8 以上、<strong>ビルド不要・カーネルモジュール不要</strong>。今の既定にして推奨</li>
+<li><code>ebpf</code> — 従来型 eBPF プローブ。<code>falco-probe.o</code> をカーネルに合わせて用意する必要がある</li>
+<li><code>kmod</code> — カーネルモジュール。古いカーネル向けの退路</li>
+</ul>
+<p>さらに <strong>gVisor</strong> 経由、そしてドライバを一切使わない <strong>プラグインのみ（kernel-less）</strong> の動かし方もある。マネージド Kubernetes やサーバレス寄りの環境では後者が効く。</p>
+<h3>ここが一番安いフィルタ</h3>
+<p>ドライバは <code>sys_enter</code> / <code>sys_exit</code> / <code>sched_process_exit</code> などの tracepoint にアタッチし、<span class="mark">関心のある syscall だけ</span>を選んでリングバッファへ流す。関係ない大量の syscall はここで捨てる。</p>
+<p>この「捨てる場所がカーネル内である」ことが性能の核心。ユーザ空間まで運んでから捨てるのは、運ぶコストを丸ごと払うのと同じ。</p>
+<div class="takeaway"><span class="cv">▸</span>安いフィルタを一番手前に置く。これが低オーバーヘッドの正体。</div>`
+  },
+  {
+    id:'ring', n:'03', tag:'RING BUFFER',
+    hoverT:'PER-CPU RING BUFFER', hoverS:'カーネルが書き、ユーザ空間が読む共有メモリ',
+    hoverM:['8 MiB / CPU (default preset)','唯一「落ちる」場所 — n_drops'],
+    jp:'リングバッファ', en:'per-cpu ring buffer',
+    x0:-33,x1:-6,z0:-19,z1:19, top:9, color:C.g30, cam:[-46,38,66],
+    metrics:[['既定サイズ','8 MiB / CPU'],['危険信号','n_drops > 0']],
+    body:`
+<h3>唯一、イベントが失われる場所</h3>
+<p>ドライバが選んだイベントは <strong>CPU ごとのリングバッファ</strong>（共有メモリ）に書かれ、ユーザ空間がそれを時刻順に読む。カーネルは待たない。ユーザ空間の読み出しが追いつかなければ、<span class="mark">新しいイベントは静かに捨てられる</span>。</p>
+<p>パイプライン全体で、イベントが本当に消えるのはここだけ。だから運用では真っ先にこの数字を見る。</p>
+<h3>ドロップを「見なかったことにしない」</h3>
+<p>Falco はドロップ自体を扱える。<code>syscall_event_drops</code> の設定で <code>ignore</code> / <code>log</code> / <code>alert</code> / <code>exit</code> を選べる。検知基盤が黙って盲目になるより、鳴らして気づくほうが正しい。</p>
+<ul>
+<li>バッファサイズは <code>syscall_buf_size_preset</code> で調整（既定は 8 MiB/CPU 相当）</li>
+<li>ドロップが続くなら、まず <strong>入口を絞る</strong>（不要な syscall を落とす）。バッファを増やすのは次の手</li>
+<li>ノード負荷スライダを上げると、右の <em>event drops</em> が増えるのが見える</li>
+</ul>
+<div class="takeaway"><span class="cv">▸</span>ドロップ率を見ていない検知基盤は、静かに嘘をつく。</div>`
+  },
+  {
+    id:'state', n:'04', tag:'STATE ENGINE (libsinsp)',
+    hoverT:'libscap / libsinsp — STATE ENGINE', hoverS:'生の syscall に文脈を貼り、意味のあるイベントに変える',
+    hoverM:['thread table · fd table','container / k8s metadata'],
+    jp:'状態エンジン', en:'libscap / libsinsp',
+    x0:2,x1:27,z0:-21,z1:21, top:22, color:0x9AD9E8, cam:[8,42,72],
+    metrics:[['thread table','pid/exe/args/uid/親子'],['fd table','fd → path / socket']],
+    body:`
+<h3>「fd=7 に write した」を意味に変える</h3>
+<p>生の syscall だけでは何も言えない。<code>write(7, ...)</code> は 7 が何なのか知らない。ここで <strong>libsinsp</strong> が状態を持って文脈を貼る。</p>
+<ul>
+<li><strong>スレッドテーブル</strong> — pid / tid / comm / exe / args / cwd / uid / loginuid、そして親子チェーン（<code>proc.pname</code>, <code>proc.aname[2]</code>）</li>
+<li><strong>FD テーブル</strong> — fd 番号 → ファイルパスやソケット（<code>fd.name</code>, <code>fd.sip</code>）</li>
+<li><strong>コンテナメタデータ</strong> — CRI ソケット経由で <code>container.id</code> / <code>container.image.repository</code></li>
+<li><strong>Kubernetes メタデータ</strong> — <code>k8smeta</code> プラグインで <code>k8s.ns.name</code> / <code>k8s.pod.name</code> / labels</li>
+</ul>
+<p>この層があるから、はじめて <span class="mark">「payments 名前空間の nginx コンテナの中で、root が /etc/shadow を読んだ」</span> と言える。ルールが人間の言葉で書けるのは、ここが下支えしているから。</p>
+<h3>コストの正体</h3>
+<p>この状態管理がメモリを使う。プロセスが激しく生成消滅する環境ではスレッドテーブルが膨らむ。「Falco が重い」と言われるとき、犯人はドライバではなくここか、次のルール層のことが多い。</p>
+<div class="takeaway"><span class="cv">▸</span>検知の質は、貼れる文脈の量で決まる。文脈のない syscall は騒音。</div>`
+  },
+  {
+    id:'rules', n:'05', tag:'RULES ENGINE',
+    hoverT:'FALCO RULES ENGINE', hoverS:'condition + output + priority。イベント型ごとに評価対象を絞る',
+    hoverM:['rules · macros · lists','per-event-type ruleset bitmask'],
+    jp:'ルールエンジン', en:'falco rules engine',
+    x0:34,x1:57,z0:-21,z1:21, top:26, color:0xD9C0E4, cam:[46,44,72],
+    metrics:[['ルール定義','condition / output / priority / tags'],['優先度','EMERGENCY … DEBUG']],
+    body:`
+<h3>ルールは3つの部品でできている</h3>
+<p><code>falco_rules.yaml</code> と自前のルールが読み込まれる。1つのルールは <strong>condition</strong>（フィルタ式）、<strong>output</strong>（鳴ったときに何を言うか）、<strong>priority</strong>、<strong>tags</strong>。共通部分は <code>macro</code> と <code>list</code> に切り出して再利用する。</p>
+<h3>なぜ数百ルールでも回るのか</h3>
+<p>素朴に作れば「イベント1件 × 全ルール」で総当たりになる。Falco は <span class="mark">イベント種別ごとに評価すべきルールの集合を事前計算</span>しておく。<code>execve</code> が来たら <code>execve</code> に関係するルールだけを触る。これが効くから、ルールを増やしても線形に重くならない。</p>
+<h3>例外は宣言的に書く</h3>
+<p>誤検知を潰すとき、条件式に <code>and not (...)</code> を足し続けると読めなくなる。<code>exceptions</code> フィールドで「この組み合わせは除く」を構造として書く。ルールの意図と例外を分けて残せる。</p>
+<ul>
+<li>優先度: EMERGENCY / ALERT / CRITICAL / ERROR / WARNING / NOTICE / INFO / DEBUG</li>
+<li><code>output</code> のフィールドは前段の状態エンジンが埋める。書けるフィールドは前の層の能力そのもの</li>
+<li>マッチしなかったイベントはここで消える。全 syscall のうち鳴るのはごく一部</li>
+</ul>
+<div class="takeaway"><span class="cv">▸</span>ルールは「悪いことのリスト」ではなく「普通ではない振る舞いの定義」。</div>`
+  },
+  {
+    id:'outputs', n:'06', tag:'OUTPUTS',
+    hoverT:'OUTPUT CHANNELS', hoverS:'stdout / file / syslog / program / http / gRPC',
+    hoverM:['Falcosidekick → 多数の宛先','Falco Talon → 自動応答'],
+    jp:'出力チャネル', en:'outputs / falcosidekick / talon',
+    x0:64,x1:83,z0:-17,z1:17, top:16, color:C.lumin, cam:[86,38,58],
+    metrics:[['ネイティブ','stdout / file / syslog / program / http / gRPC'],['実運用','Falcosidekick がハブ']],
+    body:`
+<h3>鳴った先をどう配るか</h3>
+<p>Falco 本体の出力は <code>stdout</code> / <code>file</code> / <code>syslog</code> / <code>program</code> / <code>http</code>、そして <strong>gRPC Output API</strong>。ここまでは「アラートを吐く」だけ。</p>
+<p>実運用のハブになるのは <strong>Falcosidekick</strong>。受けたアラートを Slack / Teams / Loki / Elasticsearch / Alertmanager / S3 / Kafka など多数の宛先へ扇形に配る。「検知を既存の運用に載せる」仕事はほぼここで終わる。</p>
+<h3>見るだけで終わらせないなら</h3>
+<p><strong>Falco Talon</strong> を挟むと、アラートを条件付きのアクションに繋げられる（Pod をラベルする、隔離する、止める）。<span class="mark">検知と応答は別のコンポーネント</span>であることに意味がある — 誤って止める怖さを、検知の設計と分けて調整できる。</p>
+<h3>OSS の境界線</h3>
+<p>ここが Falco OSS の終点。<em>この瞬間のアラート</em>は手に入る。持っていないのは、過去との突き合わせ・他のシグナルとの相関・組織横断の運用。それが右上の Sysdig レイヤの担当。</p>
+<div class="takeaway"><span class="cv">▸</span>アラートを出すのは半分。届いて、判断され、行動に変わって初めて検知。</div>`
+  },
+  {
+    id:'plugins', n:'07', tag:'PLUGIN INPUTS',
+    hoverT:'PLUGIN INPUTS (BYPASS LANE)', hoverS:'syscall 以外の入力も同じルールエンジンへ',
+    hoverM:['k8saudit · cloudtrail · gcpaudit','okta · github · json'],
+    jp:'プラグイン入力', en:'plugin inputs — bypass lane',
+    x0:-86,x1:-64,z0:-52,z1:-30, top:12, color:0xF3C99A, cam:[-96,40,10],
+    metrics:[['入力側','k8saudit / cloudtrail / gcpaudit / okta / github'],['共通点','同じルール言語で書ける']],
+    body:`
+<h3>カーネルの外の出来事も同じ言語で</h3>
+<p>Falco の入力は syscall だけではない。<strong>プラグイン</strong>がイベントソースを増やす — <code>k8saudit</code>（Kubernetes 監査ログ）、<code>cloudtrail</code>、<code>gcpaudit</code>、<code>okta</code>、<code>github</code>、汎用の <code>json</code>。</p>
+<p>重要なのは、これらが <span class="mark">同じルールエンジンに合流する</span>こと。「特権 Pod が作られた」「S3 バケットが公開された」「管理者ロールが付与された」を、syscall 検知と同じ書き方・同じ出力経路で扱える。</p>
+<h3>この道はドライバを通らない</h3>
+<p>プラグイン入力はカーネルのドライバもリングバッファも経由しない。だから <strong>ドライバなしで Falco を動かす</strong>構成も成り立つ（kernel-less）。カーネルに触れないマネージド環境で、クラウド側のイベントだけを見る使い方。</p>
+<ul>
+<li>入力プラグインは1プロセスに1つが基本。用途ごとに Falco を分けて動かす構成が実務的</li>
+<li>抽出（extractor）プラグインを足すと、既存イベントから新しいフィールドを引ける</li>
+</ul>
+<div class="takeaway"><span class="cv">▸</span>検知の言語をひとつに揃えると、運用が増えても複雑さが増えない。</div>`
+  },
+  {
+    id:'sysdig', n:'08', tag:'SYSDIG SECURE', floating:true,
+    hoverT:'SYSDIG SECURE — PLATFORM LAYER', hoverS:'同じ libs・同じ Falco エンジン。違いは周辺にある',
+    hoverM:['policies ↓ · events + captures ↑','runtime insights で相関'],
+    jp:'Sysdig Secure', en:'platform layer — commercial',
+    x0:52,x1:98,z0:-58,z1:-26, top:8, y:31, color:C.deepSee, cam:[104,62,10],
+    metrics:[['エンジン','Falco と同一（Sysdig が作った）'],['付加価値','記憶・相関・手']],
+    body:`
+<h3>エンジンは同じ。違うのは周辺</h3>
+<p>Sysdig エージェントは <strong>同じ libs（libscap / libsinsp）と同じ Falco エンジン</strong>を内蔵している。Falco はもともと Sysdig が作って CNCF に寄贈した。だから検知の芯は変わらない。差は、その周りに何があるか。</p>
+<h3>降りてくるもの — ポリシー</h3>
+<ul>
+<li>マネージドルールと Sysdig TRT（Threat Research Team）由来の脅威コンテンツが継続的に降りてくる</li>
+<li>ゾーン単位でポリシーを当てられる（本番と開発で違う厳しさ、を組織構造のまま表現できる）</li>
+<li>チューニングの結果が全ノードに配られる。ノードごとに YAML を配る運用から降りられる</li>
+</ul>
+<h3>上がるもの — イベント・監査・録画</h3>
+<ul>
+<li>検知イベントに加えて <strong>Activity Audit</strong>（コマンド・ファイル・ネットワーク・kubectl exec の履歴）</li>
+<li><strong>キャプチャ（.scap）</strong> — 前後の syscall を丸ごと残す。事後に「何が起きたか」を再生できる</li>
+</ul>
+<h3>相関 — ここが一番大きい差</h3>
+<p><strong>Runtime Insights</strong> は「実行中に実際に使われているパッケージ」を知っている。だから脆弱性の山を <span class="mark">in-use のものだけ</span>に絞れる。同じ CVE でも、動いていないライブラリのそれは後回しにできる。Posture / CIEM / Identity と突き合わせて「実際に到達可能で、権限があり、動いている」ものを前に出す。</p>
+<h3>手 — 応答</h3>
+<p>コンテナの kill / pause、Sysdig Sage による説明。検知から封じ込めまでを同じ文脈の中で行える。</p>
+<div class="takeaway"><span class="cv">▸</span>OSS Falco は目。Sysdig は目 + 記憶 + 相関 + 手。芯は同じものを共有している。</div>`
+  }
+];
+
+/* ============================================================
+   2. renderer / scene / camera
+   ============================================================ */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0xF7F8F8, 1);
+renderer.shadowMap.enabled = false;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xF7F8F8);
+scene.fog = new THREE.Fog(0xF7F8F8, 320, 940);
+
+const camera = new THREE.PerspectiveCamera(38, Math.max(1,innerWidth)/Math.max(1,innerHeight), 0.5, 1100);
+/* the city is ~185 units wide — pull the home shot back on narrow viewports
+   so the whole syscall→alert flow stays in frame */
+const HOME_TGT = new THREE.Vector3(7, 4, -3);
+/* the whole city, including the floating Sysdig deck */
+const CITY_BOX = new THREE.Box3(new THREE.Vector3(-90,0,-62), new THREE.Vector3(102,44,44));
+const HOME_DIR = new THREE.Vector3(-0.40, 0.53, 0.75).normalize();
+
+/* Exact fit: push the camera back along HOME_DIR until every corner of CITY_BOX
+   is inside the frustum. Adapts to any aspect ratio instead of guessing. */
+function homeCam(){
+  const a  = Math.max(1,innerWidth)/Math.max(1,innerHeight);
+  const vt = Math.tan(camera.fov*Math.PI/360);
+  const ht = vt*a;
+  const zA = HOME_DIR.clone();                                  // camera sits at +zA
+  const xA = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), zA).normalize();
+  const yA = new THREE.Vector3().crossVectors(zA, xA);
+  const p = new THREE.Vector3();
+  let d = 0;
+  for(let i=0;i<8;i++){
+    p.set(i&1 ? CITY_BOX.max.x : CITY_BOX.min.x,
+          i&2 ? CITY_BOX.max.y : CITY_BOX.min.y,
+          i&4 ? CITY_BOX.max.z : CITY_BOX.min.z).sub(HOME_TGT);
+    const pz = p.dot(zA);
+    d = Math.max(d, pz + Math.abs(p.dot(xA))/ht, pz + Math.abs(p.dot(yA))/vt);
+  }
+  return HOME_TGT.clone().add(HOME_DIR.clone().multiplyScalar(d*1.04)).toArray();
+}
+camera.position.set(...homeCam());
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(HOME_TGT);
+controls.enableDamping = true;
+controls.dampingFactor = 0.075;
+controls.maxPolarAngle = Math.PI/2 - 0.045;
+controls.minDistance = 34;
+controls.maxDistance = 720;   // must exceed the widest homeCam() fit
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0xD8DCDE, 1.05));
+const sun = new THREE.DirectionalLight(0xffffff, 0.72);
+sun.position.set(-70, 130, 90); scene.add(sun);
+const rim = new THREE.DirectionalLight(0xCFE9F0, 0.34);
+rim.position.set(90, 60, -110); scene.add(rim);
+
+/* ============================================================
+   3. mesh helpers
+   ============================================================ */
+const EDGE = new THREE.LineBasicMaterial({color:C.g30, transparent:true, opacity:0.34});
+
+function box(w,h,d,color,opacity=1,flat=false){
+  const g = new THREE.BoxGeometry(w,h,d);
+  const m = new THREE.MeshLambertMaterial({
+    color, transparent:opacity<1, opacity,
+    depthWrite:opacity>0.6, flatShading:flat
+  });
+  return new THREE.Mesh(g,m);
+}
+function edged(w,h,d,color,opacity,edgeColor){
+  const grp = new THREE.Group();
+  const mesh = box(w,h,d,color,opacity);
+  grp.add(mesh);
+  const el = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    edgeColor!=null
+      ? new THREE.LineBasicMaterial({color:edgeColor,transparent:true,opacity:0.5})
+      : EDGE
+  );
+  grp.add(el);
+  grp.userData.mesh = mesh;
+  return grp;
+}
+function put(o,x,y,z){ o.position.set(x,y,z); return o; }
+
+/* --- authoritative Sysdig chevron as a flat 3D shape --- */
+function chevronShape(){
+  const s = new THREE.Shape();
+  const S = 1/336, cx = 100*S, cy = 168*S;
+  const P = (x,y)=>[x*S-cx, (336-y)*S-cy];
+  let p = P(113.302,190.691); s.moveTo(p[0],p[1]);
+  p = P(0,303.994);      s.lineTo(p[0],p[1]);
+  p = P(32.002,335.996); s.lineTo(p[0],p[1]);
+  p = P(200,167.998);    s.lineTo(p[0],p[1]);
+  p = P(32.002,0);       s.lineTo(p[0],p[1]);
+  p = P(0,32.002);       s.lineTo(p[0],p[1]);
+  p = P(113.302,145.304);s.lineTo(p[0],p[1]);
+  const c1=P(125.861,157.863), c2=P(125.861,178.188), e=P(113.302,190.691);
+  s.bezierCurveTo(c1[0],c1[1],c2[0],c2[1],e[0],e[1]);
+  return s;
+}
+const CHEV_GEO = new THREE.ShapeGeometry(chevronShape());
+
+function chevron(x,z,size,color,opacity,rotY=0){
+  const m = new THREE.Mesh(CHEV_GEO, new THREE.MeshBasicMaterial({
+    color, transparent:true, opacity, side:THREE.DoubleSide, depthWrite:false
+  }));
+  m.scale.setScalar(size);
+  m.rotation.x = -Math.PI/2;
+  m.rotation.z = -rotY;
+  m.position.set(x, 0.07, z);
+  return m;
+}
+
+/* --- canvas text → flat ground plane --- */
+function textTexture(txt, {size=190, weight=700, color='#8A8C8E', mono=false, track=0}={}){
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  const font = `${weight} ${size}px ${mono?"'Share Tech Mono',monospace":"Poppins,sans-serif"}`;
+  ctx.font = font;
+  if(track) ctx.letterSpacing = `${track}px`;
+  const w = Math.ceil(ctx.measureText(txt).width)+size*0.3;
+  const h = Math.ceil(size*1.42);
+  cv.width = Math.max(4,w); cv.height = h;
+  const c2 = cv.getContext('2d');
+  c2.font = font;
+  if(track) c2.letterSpacing = `${track}px`;
+  c2.fillStyle = color; c2.textBaseline='middle'; c2.textAlign='left';
+  c2.fillText(txt, size*0.15, h/2);
+  const t = new THREE.CanvasTexture(cv);
+  t.anisotropy = 8; t.needsUpdate = true;
+  return {tex:t, aspect:cv.width/cv.height};
+}
+function groundText(txt, x, z, height, opts={}){
+  const {tex,aspect} = textTexture(txt, opts);
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(height*aspect, height),
+    new THREE.MeshBasicMaterial({map:tex, transparent:true,
+      opacity:opts.opacity??0.5, depthWrite:false})
+  );
+  m.rotation.x = -Math.PI/2;
+  m.rotation.z = opts.rotZ ?? 0;
+  m.position.set(x, opts.y ?? 0.05, z);
+  return m;
+}
+
+/* ============================================================
+   4. ground + district floors
+   ============================================================ */
+const world = new THREE.Group(); scene.add(world);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(340, 240),
+  new THREE.MeshLambertMaterial({color:0xFCFCFC})
+);
+ground.rotation.x = -Math.PI/2; ground.position.y = -0.06;
+world.add(ground);
+
+const grid = new THREE.GridHelper(340, 68, 0xE4E6E8, 0xEFF1F2);
+grid.position.y = -0.03; world.add(grid);
+
+/* flow road */
+(function road(){
+  const r = new THREE.Mesh(
+    new THREE.PlaneGeometry(178, 15),
+    new THREE.MeshBasicMaterial({color:0x2B2D30, transparent:true, opacity:0.055, depthWrite:false})
+  );
+  r.rotation.x = -Math.PI/2; r.position.set(1,0.01,0); world.add(r);
+  for(let x=-78; x<=88; x+=9)
+    world.add(chevron(x, 0, 2.7, 0x2B2D30, 0.13));
+})();
+
+/* ============================================================
+   5. districts — geometry per stage
+   ============================================================ */
+/* shared handles the builders (section 6) fill in.
+   Declared here because the build loop below runs before their bodies. */
+const driverSlabs = [];
+const RING_LANES  = [];
+const RULE_BLOCKS = [];
+const OUT_PIPES   = [];
+let sysdigGroup = null;
+
+/* builder dispatch — BUILD_* are hoisted function declarations */
+const BUILD = {
+  workloads:BUILD_workloads, driver:BUILD_driver, ring:BUILD_ring,
+  state:BUILD_state, rules:BUILD_rules, outputs:BUILD_outputs,
+  plugins:BUILD_plugins, sysdig:BUILD_sysdig
+};
+
+const districtObjs = {};   // id -> {group, hit, anchor}
+const hitTargets = [];
+
+DISTRICTS.forEach(d=>{
+  const g = new THREE.Group();
+  const cx = (d.x0+d.x1)/2, cz = (d.z0+d.z1)/2;
+  const w = d.x1-d.x0, dp = d.z1-d.z0;
+  const baseY = d.y ?? 0;
+  g.position.y = baseY;
+
+  /* floor patch */
+  const patch = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, dp),
+    new THREE.MeshBasicMaterial({color:d.color, transparent:true, opacity:0.13, depthWrite:false})
+  );
+  patch.rotation.x = -Math.PI/2; patch.position.set(cx, 0.03, cz);
+  g.add(patch);
+  const pOut = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(w,dp)),
+    new THREE.LineBasicMaterial({color:d.color, transparent:true, opacity:0.55})
+  );
+  pOut.rotation.x = -Math.PI/2; pOut.position.set(cx, 0.04, cz); g.add(pOut);
+
+  BUILD[d.id](g, d, cx, cz);
+
+  /* invisible hover/click volume — kept tight so the floating Sysdig deck
+     doesn't swallow clicks aimed at the districts below it */
+  const hh = d.floating ? d.top+4 : d.top+10;
+  const hit = box(w+3, hh, dp+3, 0xffffff, 0);
+  hit.material.depthWrite = false;
+  hit.position.set(cx, hh/2, cz);
+  hit.userData.district = d;
+  g.add(hit); hitTargets.push(hit);
+
+  world.add(g);
+  districtObjs[d.id] = {
+    group:g, hit,
+    anchor:new THREE.Vector3(cx, baseY + d.top + 7, cz),
+    center:new THREE.Vector3(cx, baseY + d.top/2, cz)
+  };
+});
+
+/* ============================================================
+   6. builders
+   ============================================================ */
+function BUILD_workloads(g,d,cx,cz){
+  // container "buildings" in a k8s-node grid
+  const rows=4, cols=3;
+  let i=0;
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    const x = d.x0+4.5 + c*6.6;
+    const z = d.z0+4.5 + r*9.2;
+    const h = 4 + ((i*37)%9) + (c===1?3:0);
+    const b = edged(4.4, h, 5.6, i%5===0?0xF3C99A:C.g20, 0.5);
+    put(b, x, h/2, z); g.add(b);
+    // pid accent
+    const a = box(1.1,1.1,1.1, i%4===0?C.orange:C.g40, 1);
+    put(a, x, h+1.1, z); g.add(a);
+    i++;
+  }
+  // node platform underneath
+  const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.85);
+  put(plat, cx, 0.36, cz); g.add(plat);
+  g.add(groundText('SYSCALLS', cx-1, d.z1+8, 5.0, {color:'#BBBDBF', opacity:0.4}));
+  g.add(groundText('kernel boundary →', d.x1+3, d.z0-5, 2.6,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+function BUILD_driver(g,d,cx,cz){
+  // gate wall with tracepoint pillars
+  const wall = edged(3.2, d.top, d.z1-d.z0-2, C.falco, 0.2, C.falco);
+  put(wall, cx+3.4, d.top/2, cz); g.add(wall);
+  for(let z=d.z0+3; z<=d.z1-3; z+=4.2){
+    const h = 5 + (Math.abs(z)%7);
+    const p = box(1.5,h,1.5, C.falco, 0.85);
+    put(p, cx-3.2, h/2, z); g.add(p);
+  }
+  // three driver slabs (selectable)
+  const names = ['modern_ebpf','ebpf','kmod'];
+  driverSlabs.length = 0;
+  names.forEach((nm,i)=>{
+    const slab = edged(7.6, 1.5, 8.2, C.g20, 0.75);
+    put(slab, cx-1, 1.1 + i*4.4, d.z0-6.5 - i*0.2);
+    slab.userData.drvName = nm;
+    g.add(slab); driverSlabs.push(slab);
+  });
+  g.add(groundText('DRIVER', cx-5, d.z1+8, 5.0, {color:'#7FD9E6', opacity:0.5}));
+}
+
+function BUILD_ring(g,d,cx,cz){
+  // per-cpu lanes = troughs
+  RING_LANES.length = 0;
+  for(let i=0;i<8;i++){
+    const z = -14 + i*4;
+    RING_LANES.push(z);
+    const trough = box(d.x1-d.x0-1, 0.55, 2.5, i%2?0xDDE0E2:C.g10, 0.95);
+    put(trough, cx, 0.3, z); g.add(trough);
+    // lane wall
+    const wl = box(d.x1-d.x0-1, 1.5, 0.22, C.g20, 0.34);
+    put(wl, cx, 0.9, z+1.42); g.add(wl);
+    // cpu label plate
+    const cap = box(1.5, 1.4, 2.5, C.g30, 0.9);
+    put(cap, d.x0+0.4, 0.85, z); g.add(cap);
+  }
+  // shared-memory volume
+  const shm = edged(d.x1-d.x0+1, 7.4, d.z1-d.z0-1, 0x9FB4BC, 0.14, C.g30);
+  put(shm, cx, 3.9, cz); g.add(shm);
+  // drop pit
+  const pit = new THREE.Mesh(
+    new THREE.PlaneGeometry(d.x1-d.x0-2, 5),
+    new THREE.MeshBasicMaterial({color:C.redUi, transparent:true, opacity:0.15, depthWrite:false})
+  );
+  pit.rotation.x = -Math.PI/2; pit.position.set(cx, 0.06, d.z1+4.5); g.add(pit);
+  g.add(groundText('n_drops', cx+3, d.z1+4.4, 2.4, {color:'#EA5255', mono:true, opacity:0.95}));
+  g.add(groundText('PER-CPU', cx-4, d.z1+11, 5.0, {color:'#BBBDBF', opacity:0.4}));
+  g.add(groundText('8 MiB / CPU · timestamp-ordered read', d.x0, d.z0-6, 2.3,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+  /* cpu index plates at the head of each lane */
+  RING_LANES.forEach((z,i)=>{
+    g.add(groundText('cpu'+i, d.x0-5.6, z, 1.9,
+      {color:'#8A8C8E', mono:true, opacity:0.95}));
+  });
+}
+
+function BUILD_state(g,d,cx,cz){
+  // thread table = dense tower grid
+  for(let r=0;r<5;r++) for(let c=0;c<7;c++){
+    const x = d.x0+2.6 + c*2.9;
+    const z = d.z0+3.4 + r*3.1;
+    const h = 3 + ((r*7+c*13)%11)*1.1;
+    const t = box(1.7,h,1.7, 0x7FC7DA, 0.62);
+    put(t, x, h/2, z); g.add(t);
+  }
+  // fd table block
+  const fd = edged(7, 5, 9, 0x9AD9E8, 0.42);
+  put(fd, d.x1-4.2, 2.5, d.z0+6); g.add(fd);
+  // enrichment gantries — container / k8s metadata
+  [['container',d.z1-4.5,C.falco],['k8s',d.z1-9.5,C.purple]].forEach(([lbl,z,col],i)=>{
+    const beam = box(d.x1-d.x0-3, 0.8, 1.0, col, 0.8);
+    put(beam, cx, 13 - i*0, z); g.add(beam);
+    [-1,1].forEach(s=>{
+      const leg = box(0.8, 13, 0.8, col, 0.42);
+      put(leg, cx + s*(d.x1-d.x0-3)/2, 6.5, z); g.add(leg);
+    });
+  });
+  // enclosing volume
+  const vol = edged(d.x1-d.x0+1, d.top, d.z1-d.z0+1, 0x9AD9E8, 0.09, C.g30);
+  put(vol, cx, d.top/2, cz); g.add(vol);
+  g.add(groundText('ENRICH', cx-2, d.z1+8, 5.0, {color:'#7FD9E6', opacity:0.5}));
+  g.add(groundText('thread table · fd table · container · k8s', d.x0, d.z0-6, 2.3,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+function BUILD_rules(g,d,cx,cz){
+  // priority towers (right side)
+  const prios = [
+    ['EMERGENCY',C.purple,15],['CRITICAL',C.purple,13],['ERROR',C.redUi,11],
+    ['WARNING',C.orange,9],['NOTICE',C.falco,7],['INFO',C.g30,5]
+  ];
+  prios.forEach((p,i)=>{
+    const h = p[2]*1.5;
+    const t = edged(2.7, h, 2.7, p[1], 0.72);
+    put(t, d.x1-3.2, h/2, d.z0+3.2 + i*3.1); g.add(t);
+  });
+  // rule blocks grid = ruleset
+  RULE_BLOCKS.length = 0;
+  for(let r=0;r<6;r++) for(let c=0;c<6;c++){
+    const x = d.x0+3.2 + c*2.7;
+    const z = d.z0+3.6 + r*3.0;
+    const h = 2.2 + ((r*5+c*11)%6)*0.8;
+    const b = box(1.9,h,1.9, 0xC9AEDA, 0.5);
+    put(b, x, h/2, z); g.add(b);
+    RULE_BLOCKS.push(b);
+  }
+  // engine shell
+  const shell = edged(d.x1-d.x0+1, d.top, d.z1-d.z0+1, 0xD9C0E4, 0.1, C.g30);
+  put(shell, cx, d.top/2, cz); g.add(shell);
+  // condition arch
+  const arch = box(1.2, d.top-4, d.z1-d.z0-2, C.purple, 0.13);
+  put(arch, d.x0+1.2, (d.top-4)/2, cz); g.add(arch);
+  g.add(groundText('MATCH', cx-1, d.z1+8, 5.0, {color:'#CA87DA', opacity:0.45}));
+  g.add(groundText('per-event-type ruleset · macros · lists · exceptions', d.x0, d.z0-6, 2.3,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+function BUILD_outputs(g,d,cx,cz){
+  // three output pipes
+  const pipes = [['stdout / file / syslog', 8],['gRPC output API', 0],['falcosidekick', -8]];
+  OUT_PIPES.length = 0;
+  pipes.forEach(([lbl,z],i)=>{
+    const p = box(d.x1-d.x0-2, 2.2, 3.2, i===2?C.lumin:C.g20, i===2?0.9:0.7);
+    put(p, cx, 2.4, z); g.add(p);
+    OUT_PIPES.push(z);
+  });
+  // sidekick fan-out towers
+  for(let i=0;i<6;i++){
+    const h = 3 + (i%3)*2.4;
+    const t = box(1.5,h,1.5, C.lumin, 0.9);
+    put(t, d.x1-1.5, h/2, d.z0+2.5 + i*2.4); g.add(t);
+  }
+  // talon block
+  const talon = edged(5.2, 6, 5.2, C.lumin, 0.55);
+  put(talon, d.x0+3.6, 3, d.z1-4); g.add(talon);
+  const vol = edged(d.x1-d.x0+1, d.top, d.z1-d.z0+1, C.lumin, 0.1, C.g30);
+  put(vol, cx, d.top/2, cz); g.add(vol);
+  g.add(groundText('ALERT', cx, d.z1+8, 5.0, {color:'#9FD66A', opacity:0.5}));
+  g.add(groundText('slack · loki · elastic · alertmanager · s3 · kafka', d.x0-2, d.z0-6, 2.2,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+function BUILD_plugins(g,d,cx,cz){
+  const names = ['k8saudit','cloudtrail','gcpaudit','okta','github'];
+  names.forEach((nm,i)=>{
+    const h = 4 + (i%3)*2.2;
+    const b = edged(3.4, h, 3.4, 0xF3C99A, 0.62);
+    put(b, d.x0+3.5 + (i%3)*6.2, h/2, d.z0+4 + Math.floor(i/3)*7.5);
+    g.add(b);
+  });
+  const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.85);
+  put(plat, cx, 0.36, cz); g.add(plat);
+  g.add(groundText('PLUGINS', cx-1, d.z1+5.5, 4.2, {color:'#E0B183', opacity:0.5}));
+  g.add(groundText('no driver · no ring buffer', cx-8, d.z0-4.5, 2.2,
+    {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+function BUILD_sysdig(g,d,cx,cz){
+  const w=d.x1-d.x0, dp=d.z1-d.z0;
+  // deck
+  const deck = box(w, 1.5, dp, C.deepSee, 0.94);
+  put(deck, cx, 0.75, cz); g.add(deck);
+  const rimL = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(w,1.5,dp)),
+    new THREE.LineBasicMaterial({color:C.lumin, transparent:true, opacity:0.75})
+  );
+  put(rimL, cx, 0.75, cz); g.add(rimL);
+  // capability blocks
+  const caps = [
+    ['Threat Detection', -16, -9, C.lumin, 6],
+    ['Runtime Insights', -4, -9, C.lumin, 8.5],
+    ['Posture / CIEM',    8, -9, 0x4A8C93, 5],
+    ['Activity Audit', -16,  4, 0x4A8C93, 4],
+    ['Captures (.scap)', -4, 4, 0x4A8C93, 5.5],
+    ['Response / Sage', 10,  4, C.lumin, 7]
+  ];
+  caps.forEach(([lbl,ox,oz,col,h])=>{
+    const b = box(9, h, 8.5, col, col===C.lumin?0.92:0.6);
+    put(b, cx+ox, 1.5+h/2, cz+oz); g.add(b);
+  });
+  g.add(groundText('SYSDIG SECURE', cx-6, d.z1+5, 5.2,
+    {color:'#01353E', opacity:0.9, y:1.6}));
+  g.add(groundText('same libs · same falco engine', cx-8, d.z1+9.5, 2.3,
+    {color:'#4A8C93', mono:true, opacity:0.95, y:1.6}));
+  // support columns down to ground
+  [[-w/2+5,-dp/2+5],[w/2-5,-dp/2+5],[-w/2+5,dp/2-5],[w/2-5,dp/2-5]].forEach(([ox,oz])=>{
+    const col = box(0.6, d.y, 0.6, C.g20, 0.22);
+    put(col, cx+ox, -d.y/2, cz+oz); g.add(col);
+  });
+  sysdigGroup = g;
+}
+
+/* ============================================================
+   7. event particle simulation
+   ============================================================ */
+const X_START=-80, X_DRIVER=-48, X_RING_IN=-32, X_RING_OUT=-7,
+      X_STATE=14, X_RULES_IN=35, X_RULES_OUT=56, X_OUT=73, X_END=92;
+
+const N = 1400;
+const pos = new Float32Array(N*3);
+const col = new Float32Array(N*3);
+const siz = new Float32Array(N);
+const alp = new Float32Array(N);
+
+const P = new Array(N);
+const tmpC = new THREE.Color();
+
+function setCol(i, hex, mul=1){
+  tmpC.setHex(hex);
+  col[i*3]=tmpC.r*mul; col[i*3+1]=tmpC.g*mul; col[i*3+2]=tmpC.b*mul;
+}
+
+function spawn(i, delay=0){
+  const p = P[i] || (P[i]={});
+  p.x = X_START - Math.random()*10;
+  p.z0 = (Math.random()-0.5)*30;
+  p.z = p.z0;
+  p.y = 3 + Math.random()*7;
+  p.sp = 26 + Math.random()*20;
+  p.st = 0;                     // 0 raw · 1 dropping · 2 matched · 3 dying
+  p.lane = RING_LANES.length ? RING_LANES[(Math.random()*RING_LANES.length)|0] : 0;
+  p.delay = delay;
+  p.fade = 1;
+  p.prio = 0;
+  /* per-pass gates — MUST be reset, particles are recycled */
+  p.gated = false; p.dropRolled = false; p.enriched = false; p.rolled = false;
+  p.plugin = Math.random() < 0.03;
+  if(p.plugin){
+    p.x = -84; p.z0 = -41 + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
+    /* plugin inputs bypass driver + ring buffer entirely */
+    p.gated = true; p.dropRolled = true; p.enriched = true;
+  }
+  siz[i] = p.plugin ? 1.5 : 1.15 + Math.random()*0.5;
+  alp[i] = 0;
+  setCol(i, p.plugin ? C.orange : C.g25);
+  return p;
+}
+for(let i=0;i<N;i++) spawn(i, Math.random()*4);
+
+const pg = new THREE.BufferGeometry();
+pg.setAttribute('position', new THREE.BufferAttribute(pos,3));
+pg.setAttribute('pcolor',   new THREE.BufferAttribute(col,3));
+pg.setAttribute('size',     new THREE.BufferAttribute(siz,1));
+pg.setAttribute('alpha',    new THREE.BufferAttribute(alp,1));
+
+const pMat = new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false,
+  vertexShader:`
+    attribute float size; attribute float alpha; attribute vec3 pcolor;
+    varying vec3 vC; varying float vA;
+    void main(){
+      vC=pcolor; vA=alpha;
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_PointSize = size * (620.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader:`
+    varying vec3 vC; varying float vA;
+    void main(){
+      vec2 c = gl_PointCoord - 0.5;
+      float d = dot(c,c);
+      if(d > 0.25) discard;
+      float e = smoothstep(0.25, 0.14, d);
+      gl_FragColor = vec4(vC, vA * e);
+    }`
+});
+const points = new THREE.Points(pg, pMat);
+points.frustumCulled = false;
+scene.add(points);
+
+/* --- policy downlink particles (Sysdig → rules/driver) --- */
+const PN = 200;
+const ppos = new Float32Array(PN*3), palp = new Float32Array(PN);
+const PP = [];
+function spawnPolicy(i){
+  const toRules = Math.random() < 0.6;
+  PP[i] = {
+    t: -Math.random()*2,
+    sp: 0.28 + Math.random()*0.2,
+    a:[75, 31, -41],
+    b: toRules ? [45+((Math.random()-0.5)*16), 27, -12+((Math.random()-0.5)*20)]
+               : [-48+((Math.random()-0.5)*8), 18, ((Math.random()-0.5)*30)]
+  };
+  palp[i]=0;
+}
+for(let i=0;i<PN;i++) spawnPolicy(i);
+const polGeo = new THREE.BufferGeometry();
+polGeo.setAttribute('position', new THREE.BufferAttribute(ppos,3));
+polGeo.setAttribute('alpha', new THREE.BufferAttribute(palp,1));
+const polMat = new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false,
+  uniforms:{ uColor:{value:new THREE.Color(C.lumin)} },
+  vertexShader:`
+    attribute float alpha; varying float vA;
+    void main(){ vA=alpha;
+      vec4 mv=modelViewMatrix*vec4(position,1.0);
+      gl_PointSize = 2.0*(620.0/-mv.z);
+      gl_Position=projectionMatrix*mv; }`,
+  fragmentShader:`
+    uniform vec3 uColor; varying float vA;
+    void main(){ vec2 c=gl_PointCoord-0.5; if(dot(c,c)>0.25) discard;
+      gl_FragColor=vec4(uColor, vA*0.9); }`
+});
+const polPoints = new THREE.Points(polGeo, polMat);
+polPoints.frustumCulled = false; scene.add(polPoints);
+
+/* ============================================================
+   8. state
+   ============================================================ */
+const S = {
+  mode:'oss', driver:'modern_ebpf', load:1.0,
+  selected:null, hovered:null,
+  counters:{sys:0, ring:0, drop:0, rules:0, alerts:0},
+  shown:{sys:0, ring:0, drop:0, rules:0, alerts:0},
+  alertWindow:[]
+};
+
+const DROP_BASE = 0.0002;     // healthy node ≈ no drops; overload is what causes them
+const KERNEL_PASS = 0.42;     // fraction of syscalls the driver forwards
+const MATCH_RATE  = 0.004;    // of evaluated events, only a sliver rings
+
+/* ============================================================
+   9. simulation step
+   ============================================================ */
+function step(dt){
+  const load = S.load;
+  const dropP = Math.max(0, (load-1.15)) * 0.075 + DROP_BASE;
+  const drvMul = S.driver==='modern_ebpf' ? 1 : (S.driver==='ebpf' ? 0.92 : 0.84);
+
+  for(let i=0;i<N;i++){
+    const p = P[i];
+    if(p.delay > 0){ p.delay -= dt; alp[i]=0; continue; }
+
+    const speed = p.sp * (0.55 + load*0.6) * drvMul;
+
+    /* --- plugin bypass lane: straight to the rules engine --- */
+    if(p.plugin && p.st===0){
+      p.x += speed*dt*0.8;
+      const tz = -12;
+      if(p.x > -20) p.z += (tz - p.z)*Math.min(1,dt*1.1);
+      p.y += ((6) - p.y)*Math.min(1,dt*2);
+      alp[i] = 0.85;
+      if(p.x >= X_RULES_IN) p.plugin = false;   // joins the main match logic
+      writeP(i,p); continue;
+    }
+
+    switch(p.st){
+      case 0: {
+        p.x += speed*dt;
+
+        /* kernel gate */
+        if(p.gated !== true && p.x >= X_DRIVER){
+          p.gated = true;
+          S.counters.sys++;
+          if(Math.random() > KERNEL_PASS){ p.st=3; p.fade=1; }  // dropped in-kernel
+          else { S.counters.ring++; setCol(i, C.falco, 0.62); }
+        }
+
+        /* ring buffer: snap into a per-CPU lane */
+        if(p.x > X_RING_IN && p.x < X_RING_OUT){
+          p.z += (p.lane - p.z) * Math.min(1, dt*4.2);
+          p.y += (2.6 - p.y) * Math.min(1, dt*4.2);
+          if(p.dropRolled !== true){
+            p.dropRolled = true;
+            if(Math.random() < dropP){
+              p.st = 1; p.fade = 1;
+              S.counters.drop++;
+              setCol(i, C.redUi);
+            }
+          }
+        }
+
+        /* leaving the buffer → enrichment */
+        if(p.x > X_RING_OUT && p.x < X_STATE+8){
+          p.z += (p.z0*0.6 - p.z) * Math.min(1, dt*1.6);
+          p.y += (5.5 - p.y) * Math.min(1, dt*2.2);
+          if(p.enriched !== true && p.x > X_STATE){
+            p.enriched = true;
+            setCol(i, C.falco);
+            siz[i] *= 1.25;
+          }
+        }
+
+        /* rules engine */
+        if(p.x >= X_RULES_IN && p.rolled !== true){
+          p.rolled = true;
+          S.counters.rules++;
+          if(Math.random() < MATCH_RATE){
+            p.st = 2;
+            p.prio = pickPriority();
+            setCol(i, PRIO[p.prio].hex);
+            siz[i] = 3.1;
+            S.counters.alerts++;
+            S.alertWindow.push(performance.now());
+            emitLog(p.prio);
+          } else {
+            p.st = 3; p.fade = 1;               // no match → evaporates
+          }
+        }
+        alp[i] = p.x < X_DRIVER ? 0.5 : 0.85;
+        break;
+      }
+      case 1: {                                 // dropped
+        p.x += speed*dt*0.35;
+        p.z += 17*dt;
+        p.y -= 7*dt;
+        p.fade -= dt*1.5;
+        alp[i] = Math.max(0, p.fade)*0.95;
+        if(p.fade <= 0) spawn(i, Math.random()*1.2);
+        break;
+      }
+      case 2: {                                 // matched alert
+        p.x += speed*dt*0.85;
+        if(p.x > X_RULES_OUT && p.x < X_OUT+8){
+          const tz = OUT_PIPES.length ? OUT_PIPES[p.prio % OUT_PIPES.length] : 0;
+          p.z += (tz - p.z)*Math.min(1,dt*2.4);
+          p.y += (3.4 - p.y)*Math.min(1,dt*2.4);
+        }
+        if(S.mode==='sysdig' && p.x > X_OUT+4){
+          // climb to the platform
+          p.z += (-41 - p.z)*Math.min(1,dt*0.85);
+          p.y += (33 - p.y)*Math.min(1,dt*1.05);
+          p.x += (78 - p.x)*Math.min(1,dt*0.5);
+          if(p.y > 30 && Math.abs(p.x-78) < 6){ p.st=3; p.fade=1; }
+        } else if(p.x > X_END){ p.st=3; p.fade=1; }
+        alp[i]=0.98;
+        break;
+      }
+      case 3: {                                 // fading out
+        p.x += speed*dt*0.25;
+        p.fade -= dt*2.6;
+        alp[i] = Math.max(0, p.fade)*0.6;
+        if(p.fade <= 0) spawn(i, Math.random()*(1.4/Math.max(0.3,load)));
+        break;
+      }
+    }
+    writeP(i,p);
+  }
+  pg.attributes.position.needsUpdate = true;
+  pg.attributes.pcolor.needsUpdate = true;
+  pg.attributes.alpha.needsUpdate = true;
+  pg.attributes.size.needsUpdate = true;
+
+  /* policy downlink */
+  const showPolicy = S.mode === 'sysdig';
+  polPoints.visible = showPolicy;
+  if(showPolicy){
+    for(let i=0;i<PN;i++){
+      const q = PP[i];
+      q.t += q.sp*dt;
+      if(q.t > 1.15){ spawnPolicy(i); continue; }
+      const t = Math.max(0,q.t);
+      const e = t*t*(3-2*t);
+      ppos[i*3]   = q.a[0]+(q.b[0]-q.a[0])*e;
+      ppos[i*3+1] = q.a[1]+(q.b[1]-q.a[1])*e + Math.sin(t*Math.PI)*4;
+      ppos[i*3+2] = q.a[2]+(q.b[2]-q.a[2])*e;
+      palp[i] = q.t < 0 ? 0 : Math.sin(Math.min(1,t)*Math.PI)*0.95;
+    }
+    polGeo.attributes.position.needsUpdate = true;
+    polGeo.attributes.alpha.needsUpdate = true;
+  }
+}
+function writeP(i,p){ pos[i*3]=p.x; pos[i*3+1]=p.y; pos[i*3+2]=p.z; }
+
+const PRIO = [
+  {name:'Critical', cls:'p-crit', hex:C.purple},
+  {name:'Error',    cls:'p-err',  hex:C.redUi},
+  {name:'Warning',  cls:'p-warn', hex:C.orange},
+  {name:'Notice',   cls:'p-note', hex:C.falco}
+];
+function pickPriority(){
+  const r = Math.random();
+  return r<0.10 ? 0 : r<0.32 ? 1 : r<0.74 ? 2 : 3;
+}
+
+/* ============================================================
+   10. console log lines (real Falco rule names)
+   ============================================================ */
+const RULES_LOG = [
+  ['Terminal shell in container', 2, 'user=root shell=bash parent=containerd-shim'],
+  ['Drop and execute new binary in container', 0, 'exe=/tmp/.x parent=sh'],
+  ['Read sensitive file untrusted', 1, 'file=/etc/shadow proc=cat'],
+  ['Write below etc', 1, 'file=/etc/cron.d/pwn proc=sh'],
+  ['Contact K8S API Server From Container', 2, 'connection=10.0.0.1:443 proc=curl'],
+  ['Launch Privileged Container', 2, 'image=nginx:latest privileged=true'],
+  ['Detect crypto miners using the Stratum protocol', 0, 'proc=xmrig port=3333'],
+  ['Redirect STDOUT/STDIN to Network Connection in Container', 1, 'proc=bash fd=3'],
+  ['Sudo Potential Privilege Escalation', 1, 'proc=sudoedit user=app'],
+  ['Packet socket created in container', 3, 'proc=tcpdump'],
+  ['Clear Log Activities', 1, 'file=/var/log/auth.log proc=shred'],
+  ['Search Private Keys or Passwords', 2, 'proc=grep args=-r BEGIN RSA'],
+  ['Change thread namespace', 3, 'proc=nsenter'],
+  ['Non sudo setuid', 2, 'proc=node uid=0'],
+  /* 4th element = k8saudit source → no syscall-side k8s.pod suffix */
+  ['K8s Secret Get Successfully', 2, 'ka.user=svc/deployer ka.target.name=db-creds ka.target.namespace=payments', true],
+  ['Create Privileged Pod', 0, 'ka.user=svc/ci ka.target.name=debug-pod ka.target.namespace=payments', true]
+];
+const NS = ['payments','checkout','default','kube-system','ingress','data-eng'];
+const PODS = ['api-7f9c','worker-2b1','nginx-5dd','etl-9ac','auth-3e8','cache-c17'];
+
+const clog = document.getElementById('clog');
+let logCooldown = 0, logQueue = [];
+
+function emitLog(prio){
+  if(logQueue.length > 6) return;
+  logQueue.push(prio);
+}
+function flushLog(dt){
+  logCooldown -= dt;
+  if(logCooldown > 0 || !logQueue.length) return;
+  logCooldown = 0.42 + Math.random()*0.5;
+  const prio = logQueue.shift();
+  const cand = RULES_LOG.filter(r=>r[1]===prio);
+  const r = (cand.length?cand:RULES_LOG)[(Math.random()*(cand.length||RULES_LOG.length))|0];
+  const now = new Date();
+  const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+  const p = PRIO[r[1]];
+  const ns = NS[(Math.random()*NS.length)|0], pod = PODS[(Math.random()*PODS.length)|0];
+  const ctx = r[3] ? r[2] : `${r[2]} k8s.ns=${ns} k8s.pod=${pod}`;
+  const line = document.createElement('div');
+  line.innerHTML =
+    `<span class="ts">${ts}</span> <span class="${p.cls}">${p.name}</span> ${r[0]} `+
+    `<span class="kv">(${ctx})</span>`;
+  clog.appendChild(line);
+  if(S.mode==='sysdig' && Math.random()<0.3){
+    const l2 = document.createElement('div');
+    l2.innerHTML = `<span class="ts">${ts}</span> <span class="sys">sysdig</span> `+
+      `<span class="kv">policy=Sysdig Runtime Threat Detection · capture=stored · in-use CVE correlated</span>`;
+    clog.appendChild(l2);
+  }
+  while(clog.children.length > 26) clog.removeChild(clog.firstChild);
+}
+
+/* ============================================================
+   11. HTML labels anchored to 3D
+   ============================================================ */
+const tagEls = {};
+DISTRICTS.forEach(d=>{
+  const el = document.createElement('div');
+  el.className = 'tag';
+  el.innerHTML = `${d.tag}<span class="cnt">${d.n}</span>`;
+  document.body.appendChild(el);
+  tagEls[d.id] = el;
+});
+
+const v = new THREE.Vector3();
+function updateTags(){
+  for(const d of DISTRICTS){
+    const o = districtObjs[d.id];
+    v.copy(o.anchor).project(camera);
+    const el = tagEls[d.id];
+    const behind = v.z > 1;
+    if(behind){ el.style.opacity = 0; continue; }
+    const x = (v.x*0.5+0.5)*innerWidth;
+    const y = (-v.y*0.5+0.5)*innerHeight;
+    el.style.left = x+'px'; el.style.top = y+'px';
+    const dist = camera.position.distanceTo(o.anchor);
+    el.style.opacity = dist > 780 ? 0 : 1;
+    el.classList.toggle('hot', S.hovered===d.id || S.selected===d.id);
+    el.classList.toggle('dim',
+      d.id==='sysdig' && S.mode!=='sysdig');
+  }
+}
+
+/* ============================================================
+   12. hover / pick
+   ============================================================ */
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const hoverCard = document.getElementById('hoverCard');
+const hcT = hoverCard.querySelector('.hc-t');
+const hcN = hoverCard.querySelector('.hc-n');
+const hcS = hoverCard.querySelector('.hc-s');
+const hcM = hoverCard.querySelector('.hc-m');
+let mouse = {x:-1e4,y:-1e4};
+
+renderer.domElement.addEventListener('pointermove', e=>{
+  mouse.x = e.clientX; mouse.y = e.clientY;
+  ndc.x = (e.clientX/innerWidth)*2-1;
+  ndc.y = -(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(hitTargets, false);
+  const d = hits.length ? hits[0].object.userData.district : null;
+  if((d?d.id:null) !== S.hovered){
+    S.hovered = d ? d.id : null;
+    if(d){
+      hcT.textContent = d.hoverT;
+      hcN.textContent = '+'+d.n;
+      hcS.textContent = d.hoverS;
+      hcM.innerHTML = d.hoverM.join('<br>');
+      hoverCard.classList.add('show');
+    } else hoverCard.classList.remove('show');
+    renderer.domElement.style.cursor = d ? 'pointer' : 'grab';
+  }
+  if(S.hovered){
+    const w = hoverCard.offsetWidth || 300, h = hoverCard.offsetHeight || 90;
+    hoverCard.style.left = Math.min(innerWidth-w-14, e.clientX+18)+'px';
+    hoverCard.style.top  = Math.max(12, e.clientY-h-16)+'px';
+  }
+});
+renderer.domElement.addEventListener('pointerleave', ()=>{
+  S.hovered=null; hoverCard.classList.remove('show');
+});
+
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e=>{ downAt={x:e.clientX,y:e.clientY,t:performance.now()}; });
+renderer.domElement.addEventListener('pointerup', e=>{
+  if(!downAt) return;
+  const moved = Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y);
+  const quick = performance.now()-downAt.t < 420;
+  downAt = null;
+  if(moved > 6 || !quick) return;
+  ndc.x = (e.clientX/innerWidth)*2-1;
+  ndc.y = -(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(hitTargets, false);
+  if(hits.length) select(hits[0].object.userData.district.id);
+  else closeDrawer();
+});
+
+/* ============================================================
+   13. camera flight + drawer
+   ============================================================ */
+let flight = null;
+function flyTo(camPos, target, ms=1050){
+  flight = {
+    t:0, ms,
+    fromP:camera.position.clone(), toP:new THREE.Vector3(...camPos),
+    fromT:controls.target.clone(),  toT:target.clone()
+  };
+}
+function easeIO(t){ return t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2; }
+
+const drawer = document.getElementById('drawer');
+function select(id){
+  const d = DISTRICTS.find(x=>x.id===id);
+  if(!d) return;
+  S.selected = id;
+  flyTo(d.cam, districtObjs[id].center);
+  document.getElementById('dEyebrow').textContent = `stage ${d.n} — ${d.tag.toLowerCase()}`;
+  document.getElementById('dTitle').textContent = d.jp;
+  document.getElementById('dEn').textContent = d.en;
+  const mHtml = d.metrics.map(([k,val])=>
+    `<div class="metric"><div class="k">${k}</div><div class="v">${val}</div></div>`).join('');
+  document.getElementById('dBody').innerHTML =
+    `<div class="metrics">${mHtml}</div>` + d.body;
+  document.getElementById('dBody').scrollTop = 0;
+  drawer.classList.add('open');
+  [...document.querySelectorAll('#tour button')].forEach(b=>
+    b.classList.toggle('on', b.dataset.id===id));
+  document.getElementById('hint').classList.add('gone');
+  if(id==='sysdig') setMode('sysdig');
+}
+function closeDrawer(){
+  S.selected=null; drawer.classList.remove('open');
+  [...document.querySelectorAll('#tour button')].forEach(b=>b.classList.remove('on'));
+}
+document.getElementById('dclose').onclick = closeDrawer;
+
+/* tour bar */
+const tour = document.getElementById('tour');
+DISTRICTS.forEach(d=>{
+  const b = document.createElement('button');
+  b.dataset.id = d.id;
+  b.innerHTML = `<span class="n">${d.n}</span>${d.jp}`;
+  b.onclick = ()=>select(d.id);
+  tour.appendChild(b);
+});
+const reset = document.createElement('button');
+reset.innerHTML = `<span class="n">↺</span>全体`;
+reset.onclick = ()=>{ closeDrawer(); flyTo(homeCam(), HOME_TGT); };
+tour.appendChild(reset);
+
+/* ============================================================
+   14. controls: mode / driver / load / console
+   ============================================================ */
+function setMode(m){
+  S.mode = m;
+  [...document.querySelectorAll('#modeSeg button')].forEach(b=>
+    b.classList.toggle('on', b.dataset.mode===m));
+  document.getElementById('ctitle').textContent =
+    m==='sysdig' ? 'sysdig agent · policies from Sysdig Secure' : 'falco -o json_output=false';
+  if(sysdigGroup){
+    sysdigGroup.traverse(o=>{
+      if(o.material && o.material.opacity !== undefined){
+        if(o.userData._o0 === undefined) o.userData._o0 = o.material.opacity;
+        o.material.transparent = true;
+        o.material.opacity = o.userData._o0 * (m==='sysdig' ? 1 : 0.16);
+      }
+    });
+  }
+}
+document.querySelectorAll('#modeSeg button').forEach(b=>
+  b.onclick = ()=>setMode(b.dataset.mode));
+
+document.querySelectorAll('#drvSeg button').forEach(b=>
+  b.onclick = ()=>{
+    S.driver = b.dataset.drv;
+    [...document.querySelectorAll('#drvSeg button')].forEach(x=>
+      x.classList.toggle('on', x===b));
+    driverSlabs.forEach(s=>{
+      const on = s.userData.drvName === S.driver;
+      const mm = s.userData.mesh;
+      mm.material.color.setHex(on ? C.falco : C.g20);
+      mm.material.opacity = on ? 0.95 : 0.4;
+    });
+  });
+
+const loadRange = document.getElementById('loadRange');
+const loadVal = document.getElementById('loadVal');
+loadRange.oninput = ()=>{
+  S.load = loadRange.value/100;
+  loadVal.textContent = '×'+S.load.toFixed(1);
+};
+
+const cbox = document.getElementById('consoleBox');
+document.getElementById('ctoggle').onclick = ()=> cbox.classList.toggle('open');
+cbox.classList.add('open');
+
+addEventListener('keydown', e=>{
+  const i = parseInt(e.key,10);
+  if(i>=1 && i<=DISTRICTS.length) select(DISTRICTS[i-1].id);
+  if(e.key==='Escape') closeDrawer();
+  if(e.key==='0'){ closeDrawer(); flyTo(homeCam(), HOME_TGT); }
+});
+
+/* ============================================================
+   15. minimap
+   ============================================================ */
+const mm = document.getElementById('mmc');
+const mctx = mm.getContext('2d');
+const MM_W = mm.width, MM_H = mm.height;
+const MM = {x0:-100, x1:110, z0:-70, z1:60};
+function mx(x){ return (x-MM.x0)/(MM.x1-MM.x0)*MM_W; }
+function mz(z){ return (z-MM.z0)/(MM.z1-MM.z0)*MM_H; }
+
+const MM_FILL = {
+  workloads:'#BBBDBF', driver:'#00CBE2', ring:'#8A8C8E', state:'#9AD9E8',
+  rules:'#CA87DA', outputs:'#BDF78B', plugins:'#F3C99A', sysdig:'#01353E'
+};
+function drawMinimap(){
+  mctx.clearRect(0,0,MM_W,MM_H);
+  mctx.fillStyle = '#FAFBFB'; mctx.fillRect(0,0,MM_W,MM_H);
+
+  // flow spine
+  mctx.strokeStyle='rgba(43,45,48,.10)'; mctx.lineWidth=7;
+  mctx.beginPath(); mctx.moveTo(mx(-80),mz(0)); mctx.lineTo(mx(90),mz(0)); mctx.stroke();
+
+  DISTRICTS.forEach(d=>{
+    const x=mx(d.x0), y=mz(d.z0), w=mx(d.x1)-mx(d.x0), h=mz(d.z1)-mz(d.z0);
+    const active = S.selected===d.id || S.hovered===d.id;
+    const dim = d.id==='sysdig' && S.mode!=='sysdig';
+    mctx.globalAlpha = dim ? 0.2 : (active ? 0.9 : 0.42);
+    mctx.fillStyle = MM_FILL[d.id];
+    mctx.beginPath(); mctx.roundRect(x,y,w,h,3); mctx.fill();
+    mctx.globalAlpha = dim ? 0.3 : 1;
+    mctx.strokeStyle = active ? '#000' : 'rgba(0,0,0,.14)';
+    mctx.lineWidth = active ? 1.4 : 0.8;
+    mctx.beginPath(); mctx.roundRect(x,y,w,h,3); mctx.stroke();
+    mctx.globalAlpha = dim ? 0.35 : 0.85;
+    mctx.fillStyle = active ? '#000' : '#535557';
+    mctx.font = '400 7.5px "Share Tech Mono", monospace';
+    mctx.fillText(d.n, x+3, y+9.5);
+  });
+  mctx.globalAlpha = 1;
+
+  // camera position + look direction
+  const cpx = mx(camera.position.x), cpz = mz(camera.position.z);
+  const tx = mx(controls.target.x), tz = mz(controls.target.z);
+  mctx.strokeStyle='rgba(0,0,0,.28)'; mctx.lineWidth=1;
+  mctx.beginPath(); mctx.moveTo(cpx,cpz); mctx.lineTo(tx,tz); mctx.stroke();
+  mctx.fillStyle='#000';
+  mctx.beginPath(); mctx.arc(cpx,cpz,3.4,0,7); mctx.fill();
+  mctx.fillStyle='#BDF78B';
+  mctx.beginPath(); mctx.arc(tx,tz,2.4,0,7); mctx.fill();
+
+  mctx.fillStyle='rgba(0,0,0,.32)';
+  mctx.font='400 7px "Share Tech Mono", monospace';
+  mctx.fillText('N ▲', 5, MM_H-6);
+}
+if(!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r);
+    this.arcTo(x+w,y+h,x,y+h,r); this.arcTo(x,y+h,x,y,r);
+    this.arcTo(x,y,x+w,y,r); this.closePath(); return this;
+  };
+}
+
+/* ============================================================
+   16. HUD numbers
+   ============================================================ */
+const els = {
+  sys:document.getElementById('mSys'), ring:document.getElementById('mRing'),
+  drop:document.getElementById('mDrop'), rules:document.getElementById('mRules'),
+  alert:document.getElementById('mAlert')
+};
+const T0 = performance.now();
+let hudT = 0, lastC = {...S.counters};
+function updateHud(dt){
+  hudT += dt;
+  if(hudT < 0.42) return;
+  const k = 1/hudT;
+  // scale the visual sim up to a plausible busy-node range (illustrative)
+  const SCALE = 145;
+  const sysRate  = (S.counters.sys  - lastC.sys ) * k * SCALE;
+  const ringRate = (S.counters.ring - lastC.ring) * k * SCALE;
+  const dropRate = (S.counters.drop - lastC.drop) * k * SCALE;
+  const ruleRate = (S.counters.rules- lastC.rules)* k * SCALE;
+  lastC = {...S.counters}; hudT = 0;
+
+  const sm = (a,b)=> a + (b-a)*0.35;
+  S.shown.sys  = sm(S.shown.sys, sysRate);
+  S.shown.ring = sm(S.shown.ring, ringRate);
+  S.shown.drop = sm(S.shown.drop, dropRate);
+  S.shown.rules= sm(S.shown.rules, ruleRate);
+
+  const now = performance.now();
+  S.alertWindow = S.alertWindow.filter(t=> now-t < 60000);
+  /* alerts/min — extrapolate until a full 60s window has actually elapsed */
+  const win = Math.min(60000, Math.max(5000, now - T0));
+  const apm = S.alertWindow.length * (60000/win);
+
+  els.sys.textContent   = fmt(S.shown.sys);
+  els.ring.textContent  = fmt(S.shown.ring);
+  const dropPct = S.shown.ring>0 ? (S.shown.drop/(S.shown.ring+S.shown.drop))*100 : 0;
+  els.drop.textContent  = fmt(S.shown.drop) + '  (' + dropPct.toFixed(2) + '%)';
+  els.rules.textContent = fmt(S.shown.rules);
+  els.alert.textContent = Math.round(apm);
+  els.drop.className = dropPct > 0.2 ? 'red' : 'dark';
+}
+function fmt(n){
+  if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if(n >= 1e3) return (n/1e3).toFixed(1)+'k';
+  return Math.round(n).toString();
+}
+
+/* ============================================================
+   17. loop
+   ============================================================ */
+const clock = new THREE.Clock();
+let mmT = 0;
+
+function frame(){
+  const dt = Math.min(0.05, clock.getDelta());
+
+  if(flight){
+    flight.t += dt*1000;
+    const t = Math.min(1, flight.t/flight.ms), e = easeIO(t);
+    camera.position.lerpVectors(flight.fromP, flight.toP, e);
+    controls.target.lerpVectors(flight.fromT, flight.toT, e);
+    if(t >= 1) flight = null;
+  }
+  controls.update();
+
+  step(dt);
+  flushLog(dt);
+  updateTags();
+  updateHud(dt);
+
+  // pulse the matched rule blocks
+  const tt = clock.elapsedTime;
+  for(let i=0;i<RULE_BLOCKS.length;i++){
+    const b = RULE_BLOCKS[i];
+    const ph = Math.sin(tt*2.2 + i*1.7);
+    b.material.opacity = 0.42 + Math.max(0,ph)*0.42*Math.min(1.4,S.load);
+  }
+
+  mmT += dt;
+  if(mmT > 0.09){ drawMinimap(); mmT = 0; }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+/* survive a 0×0 start (background tab / hidden pane) and any later resize */
+function onResize(){
+  const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+}
+addEventListener('resize', onResize);
+new ResizeObserver(onResize).observe(document.documentElement);
+onResize();
+
+/* manual-step hook — lets the sim be driven/inspected without rAF */
+window.__city = {
+  step, S, DISTRICTS, select, setMode,
+  frames:0,
+  pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); flushLog(dt); updateHud(dt); } },
+  renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
+  homeCam,
+  camDist(){ return camera.position.distanceTo(controls.target); },
+  applyHome(){ onResize(); camera.position.set(...homeCam()); controls.target.copy(HOME_TGT);
+               controls.update(); updateTags(); renderer.render(scene,camera); }
+};
+
+/* init */
+setMode('oss');
+document.querySelector('#drvSeg button').click();
+drawMinimap();
+frame();
+setTimeout(()=> document.getElementById('loader').classList.add('gone'), 620);
+setTimeout(()=> document.getElementById('hint').classList.add('gone'), 9000);
+</script>
+</body>
+</html>
