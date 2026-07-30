@@ -51,7 +51,8 @@ canvas{display:block}
 }
 
 /* ---------- top-left: identity + mode ---------- */
-#topLeft{top:20px;left:20px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+#topLeft{top:20px;left:20px;display:flex;flex-direction:column;gap:10px;align-items:flex-start;
+  max-width:calc(100vw - 310px)}   /* wrap before colliding with the right column */
 .brandbar{display:flex;align-items:center;gap:14px;padding:12px 18px}
 .brandbar svg{display:block;height:15px;width:auto;color:var(--black)}
 .brandbar .div{width:1px;height:22px;background:var(--grey-10)}
@@ -72,7 +73,8 @@ canvas{display:block}
   letter-spacing:.14em;padding:7px 8px 7px 10px;text-transform:uppercase}
 
 /* ---------- top-right: legend + hud ---------- */
-#topRight{top:20px;right:20px;width:252px;display:flex;flex-direction:column;gap:10px}
+#topRight{top:20px;right:20px;width:262px;display:flex;flex-direction:column;gap:10px;
+  max-height:calc(100vh - 40px);overflow-y:auto;scrollbar-width:thin}
 .hud{padding:14px 16px}
 .hud h4{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
   color:var(--grey-25);text-transform:uppercase;margin-bottom:10px}
@@ -83,6 +85,37 @@ canvas{display:block}
 .hudrow b.blue{color:#00A8BC}
 .hudrow b.red{color:var(--red-ui)}
 .hudrow b.dark{color:var(--black)}
+
+/* ---------- verdict line: which kind of drop is this? ---------- */
+.verdict{margin-top:11px;padding:8px 10px;border-radius:7px;font-size:11px;line-height:1.55;
+  background:var(--grey-10);color:var(--grey-50);border-left:3px solid var(--grey-20)}
+.verdict.ok{background:rgba(189,247,139,.26);border-left-color:var(--lumin);color:var(--grey-60)}
+.verdict.burst{background:rgba(255,169,64,.15);border-left-color:var(--orange);color:#8A5A16}
+.verdict.sustained{background:rgba(234,82,85,.13);border-left-color:var(--red-ui);color:#9B2F32}
+.verdict.dead{background:var(--grey-90);border-left-color:var(--red-ui);color:#fff}
+.verdict b{font-weight:700;color:inherit}
+
+/* ---------- tuning panel ---------- */
+.tune{padding:14px 16px 15px}
+.tune h4{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
+  color:var(--grey-25);text-transform:uppercase;margin-bottom:12px}
+.trow{margin-bottom:13px}
+.tlbl{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-30);margin-bottom:6px;
+  display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.tlbl b{color:var(--black);font-weight:400;white-space:nowrap}
+.tseg{display:flex;gap:3px;background:var(--grey-10);padding:3px;border-radius:8px}
+.tseg button{flex:1;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;
+  border:0;background:transparent;color:var(--grey-40);padding:5px 4px;border-radius:6px;
+  cursor:pointer;transition:.16s;white-space:nowrap}
+.tseg button:hover{background:#fff;color:var(--black)}
+.tseg button.on{background:var(--black);color:#fff}
+.tchk{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10px;
+  color:var(--grey-40);cursor:pointer;margin-bottom:11px}
+.tchk input{accent-color:var(--red-ui);width:13px;height:13px;cursor:pointer;flex:none}
+.treset{width:100%;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.11em;
+  text-transform:uppercase;border:1px solid var(--grey-10);background:#fff;color:var(--grey-30);
+  padding:7px;border-radius:8px;cursor:pointer;transition:.16s}
+.treset:hover{color:var(--black);border-color:var(--grey-20)}
 
 .legend{padding:14px 16px}
 .lgrow{display:flex;align-items:center;gap:9px;font-family:var(--font-mono);
@@ -273,6 +306,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button data-mode="oss" class="on">Falco OSS</button>
       <button data-mode="sysdig">+ Sysdig</button>
     </div>
+    <div class="panel seg" id="deploySeg">
+      <span class="caplbl">deploy</span>
+      <button data-dep="k8s" class="on">K8s DaemonSet</button>
+      <button data-dep="host">Host (systemd)</button>
+      <button data-dep="plugins">Kernel-less</button>
+    </div>
     <div class="panel seg" id="drvSeg">
       <span class="caplbl">driver</span>
       <button data-drv="modern_ebpf" class="on">modern_ebpf</button>
@@ -290,11 +329,53 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div class="hudrow"><span>event drops</span><b class="red" id="mDrop">—</b></div>
     <div class="hudrow"><span>rules evaluated</span><b class="dark" id="mRules">—</b></div>
     <div class="hudrow"><span>alerts / min</span><b class="dark" id="mAlert">—</b></div>
+    <div class="hudrow"><span>drain utilisation</span><b class="dark" id="mUtil">—</b></div>
+    <div class="verdict" id="mVerdict">—</div>
   </div>
 
   <div class="panel slider">
     <label>node load <b id="loadVal">×1.0</b></label>
     <input type="range" id="loadRange" min="20" max="320" value="100">
+  </div>
+
+  <div class="panel tune">
+    <h4>tuning · falco.yaml</h4>
+
+    <div class="trow">
+      <div class="tlbl">base_syscalls <b id="tSetV">default</b></div>
+      <div class="tseg" id="segSet">
+        <button data-set="all">all</button>
+        <button data-set="default" class="on">default</button>
+        <button data-set="custom">custom_set</button>
+      </div>
+    </div>
+
+    <div class="trow">
+      <div class="tlbl">buf_size_preset <b id="tBufV">4 · 8 MiB/CPU</b></div>
+      <input type="range" id="rngBuf" min="1" max="10" value="4">
+    </div>
+
+    <div class="trow">
+      <div class="tlbl">cpus_for_each_syscall_buffer <b id="tCpuV">2 → 4 buffers</b></div>
+      <div class="tseg" id="segCpu">
+        <button data-cpu="1">1</button>
+        <button data-cpu="2" class="on">2</button>
+        <button data-cpu="4">4</button>
+      </div>
+    </div>
+
+    <div class="trow">
+      <div class="tlbl">syscall_event_drops.actions</div>
+      <div class="tseg" id="segAct">
+        <button data-act="ignore">ignore</button>
+        <button data-act="log">log</button>
+        <button data-act="alert" class="on">alert</button>
+        <button data-act="exit">exit</button>
+      </div>
+    </div>
+
+    <label class="tchk"><input type="checkbox" id="chkSlow"><span>slow output（同期 program / http）</span></label>
+    <button class="treset" id="tReset">reset to defaults</button>
   </div>
 
   <div class="panel legend">
@@ -4285,7 +4366,10 @@ rim.position.set(90, 60, -110); scene.add(rim);
 /* ============================================================
    3. mesh helpers
    ============================================================ */
-const EDGE = new THREE.LineBasicMaterial({color:C.g30, transparent:true, opacity:0.34});
+/* Per-instance edge material on purpose: districts get dimmed independently,
+   and a shared material would leak one district's opacity into all of them. */
+const edgeMat = (color, opacity) =>
+  new THREE.LineBasicMaterial({color:color ?? C.g30, transparent:true, opacity:opacity ?? 0.34});
 
 function box(w,h,d,color,opacity=1,flat=false){
   const g = new THREE.BoxGeometry(w,h,d);
@@ -4301,9 +4385,7 @@ function edged(w,h,d,color,opacity,edgeColor){
   grp.add(mesh);
   const el = new THREE.LineSegments(
     new THREE.EdgesGeometry(mesh.geometry),
-    edgeColor!=null
-      ? new THREE.LineBasicMaterial({color:edgeColor,transparent:true,opacity:0.5})
-      : EDGE
+    edgeColor!=null ? edgeMat(edgeColor, 0.5) : edgeMat()
   );
   grp.add(el);
   grp.userData.mesh = mesh;
@@ -4408,6 +4490,10 @@ const RING_LANES  = [];
 const RULE_BLOCKS = [];
 const OUT_PIPES   = [];
 let sysdigGroup = null;
+/* pieces the tuning panel reshapes at runtime */
+const ringRefs  = { shm:null, troughs:[], walls:[], caps:[] };
+const outRefs   = { pipes:[] };
+const stateRefs = { gantries:{} };
 
 /* builder dispatch — BUILD_* are hoisted function declarations */
 const BUILD = {
@@ -4508,21 +4594,26 @@ function BUILD_driver(g,d,cx,cz){
 function BUILD_ring(g,d,cx,cz){
   // per-cpu lanes = troughs
   RING_LANES.length = 0;
+  ringRefs.troughs.length = 0; ringRefs.walls.length = 0; ringRefs.caps.length = 0;
   for(let i=0;i<8;i++){
     const z = -14 + i*4;
     RING_LANES.push(z);
-    const trough = box(d.x1-d.x0-1, 0.55, 2.5, i%2?0xDDE0E2:C.g10, 0.95);
+    const trough = box(d.x1-d.x0-1, 0.55, 2.5, C.g10, 0.95);
     put(trough, cx, 0.3, z); g.add(trough);
-    // lane wall
+    ringRefs.troughs.push(trough);
+    // lane wall — its height tracks buf_size_preset
     const wl = box(d.x1-d.x0-1, 1.5, 0.22, C.g20, 0.34);
     put(wl, cx, 0.9, z+1.42); g.add(wl);
-    // cpu label plate
+    ringRefs.walls.push(wl);
+    // cpu plate
     const cap = box(1.5, 1.4, 2.5, C.g30, 0.9);
     put(cap, d.x0+0.4, 0.85, z); g.add(cap);
+    ringRefs.caps.push(cap);
   }
-  // shared-memory volume
+  // shared-memory volume — scales with buf_size_preset
   const shm = edged(d.x1-d.x0+1, 7.4, d.z1-d.z0-1, 0x9FB4BC, 0.14, C.g30);
   put(shm, cx, 3.9, cz); g.add(shm);
+  ringRefs.shm = shm;
   // drop pit
   const pit = new THREE.Mesh(
     new THREE.PlaneGeometry(d.x1-d.x0-2, 5),
@@ -4552,14 +4643,17 @@ function BUILD_state(g,d,cx,cz){
   // fd table block
   const fd = edged(7, 5, 9, 0x9AD9E8, 0.42);
   put(fd, d.x1-4.2, 2.5, d.z0+6); g.add(fd);
-  // enrichment gantries — container / k8s metadata
+  // enrichment gantries — container / k8s metadata (k8s one is deploy-dependent)
   [['container',d.z1-4.5,C.falco],['k8s',d.z1-9.5,C.purple]].forEach(([lbl,z,col],i)=>{
+    const gantry = new THREE.Group();
     const beam = box(d.x1-d.x0-3, 0.8, 1.0, col, 0.8);
-    put(beam, cx, 13 - i*0, z); g.add(beam);
+    put(beam, cx, 13, z); gantry.add(beam);
     [-1,1].forEach(s=>{
       const leg = box(0.8, 13, 0.8, col, 0.42);
-      put(leg, cx + s*(d.x1-d.x0-3)/2, 6.5, z); g.add(leg);
+      put(leg, cx + s*(d.x1-d.x0-3)/2, 6.5, z); gantry.add(leg);
     });
+    g.add(gantry);
+    stateRefs.gantries[lbl] = gantry;
   });
   // enclosing volume
   const vol = edged(d.x1-d.x0+1, d.top, d.z1-d.z0+1, 0x9AD9E8, 0.09, C.g30);
@@ -4604,11 +4698,12 @@ function BUILD_rules(g,d,cx,cz){
 function BUILD_outputs(g,d,cx,cz){
   // three output pipes
   const pipes = [['stdout / file / syslog', 8],['gRPC output API', 0],['falcosidekick', -8]];
-  OUT_PIPES.length = 0;
+  OUT_PIPES.length = 0; outRefs.pipes.length = 0;
   pipes.forEach(([lbl,z],i)=>{
     const p = box(d.x1-d.x0-2, 2.2, 3.2, i===2?C.lumin:C.g20, i===2?0.9:0.7);
     put(p, cx, 2.4, z); g.add(p);
     OUT_PIPES.push(z);
+    outRefs.pipes.push(p);
   });
   // sidekick fan-out towers
   for(let i=0;i<6;i++){
@@ -4677,7 +4772,34 @@ function BUILD_sysdig(g,d,cx,cz){
 }
 
 /* ============================================================
-   7. event particle simulation
+   7. state + the drop model
+   (declared before the particle system — spawn() reads S.dead)
+   ============================================================ */
+const TUNE_DEFAULTS = { syscallSet:'default', bufPreset:4, cpusPerBuf:2, slowOutput:false, dropAction:'alert' };
+
+const S = {
+  mode:'oss', driver:'modern_ebpf', deploy:'k8s', load:1.0,
+  selected:null, hovered:null,
+  tune:{...TUNE_DEFAULTS},
+  dead:false,              // syscall_event_drops.actions: exit fired
+  deadDrops:0,
+  counters:{sys:0, ring:0, drop:0, rules:0, alerts:0},
+  shown:{sys:0, ring:0, drop:0, rules:0, alerts:0},
+  alertWindow:[]
+};
+
+const KERNEL_PASS = 0.42;     // fraction of syscalls the default set forwards
+const MATCH_RATE  = 0.004;    // of evaluated events, only a sliver rings
+
+/* buf_size_preset 1..10 — powers of two, preset 4 = the 8 MiB default */
+const PRESET_MIB = p => Math.pow(2, p-1);
+
+/* How much of the syscall stream the driver is told to forward.
+   base_syscalls.custom_set is the lever that actually reduces inflow. */
+const SET_MUL = { all:1.85, default:1.0, custom:0.40 };
+
+/* ============================================================
+   8. event particle simulation
    ============================================================ */
 const X_START=-80, X_DRIVER=-48, X_RING_IN=-32, X_RING_OUT=-7,
       X_STATE=14, X_RULES_IN=35, X_RULES_OUT=56, X_OUT=73, X_END=92;
@@ -4705,12 +4827,13 @@ function spawn(i, delay=0){
   p.sp = 26 + Math.random()*20;
   p.st = 0;                     // 0 raw · 1 dropping · 2 matched · 3 dying
   p.lane = RING_LANES.length ? RING_LANES[(Math.random()*RING_LANES.length)|0] : 0;
-  p.delay = delay;
+  p.delay = S.dead ? 1e9 : delay;   // agent stopped → nothing new enters the pipeline
   p.fade = 1;
   p.prio = 0;
   /* per-pass gates — MUST be reset, particles are recycled */
   p.gated = false; p.dropRolled = false; p.enriched = false; p.rolled = false;
-  p.plugin = Math.random() < 0.03;
+  /* kernel-less: every event comes in through a plugin */
+  p.plugin = S.deploy === 'plugins' ? true : Math.random() < 0.03;
   if(p.plugin){
     p.x = -84; p.z0 = -41 + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
     /* plugin inputs bypass driver + ring buffer entirely */
@@ -4790,27 +4913,50 @@ const polMat = new THREE.ShaderMaterial({
 const polPoints = new THREE.Points(polGeo, polMat);
 polPoints.frustumCulled = false; scene.add(polPoints);
 
-/* ============================================================
-   8. state
-   ============================================================ */
-const S = {
-  mode:'oss', driver:'modern_ebpf', load:1.0,
-  selected:null, hovered:null,
-  counters:{sys:0, ring:0, drop:0, rules:0, alerts:0},
-  shown:{sys:0, ring:0, drop:0, rules:0, alerts:0},
-  alertWindow:[]
-};
+/* ------------------------------------------------------------------
+   The drop model, and the reason this whole panel exists.
 
-const DROP_BASE = 0.0002;     // healthy node ≈ no drops; overload is what causes them
-const KERNEL_PASS = 0.42;     // fraction of syscalls the driver forwards
-const MATCH_RATE  = 0.004;    // of evaluated events, only a sliver rings
+   Two different failure modes, with two different fixes:
+
+   1. SUSTAINED  inflow > drain capacity for a sustained period.
+      Fraction lost = 1 - capacity/inflow. A bigger ring buffer does
+      NOT help — it fills up and then you lose the same share. The fix
+      is to reduce inflow (base_syscalls) or raise capacity.
+
+   2. BURST      inflow fits on average but arrives in spikes.
+      The buffer absorbs spikes, so a bigger buf_size_preset genuinely
+      fixes this one.
+
+   Conflating the two is why people bump the buffer, see no change, and
+   conclude Falco "can't keep up".
+   ------------------------------------------------------------------ */
+function model(){
+  const t = S.tune;
+  const inflow = S.load * SET_MUL[t.syscallSet];
+
+  /* defaults are sized so a healthy node sits around 65% utilisation */
+  let cap = t.cpusPerBuf===1 ? 1.79 : t.cpusPerBuf===2 ? 1.55 : 1.26;
+  if(S.driver==='ebpf') cap *= 0.96;
+  if(S.driver==='kmod') cap *= 0.90;
+  if(t.slowOutput)      cap *= 0.52;   // userspace blocked writing alerts drains slower
+
+  const util      = inflow / cap;
+  const sustained = Math.max(0, 1 - 1/util);
+  /* burst loss only bites as you approach capacity, and shrinks as the buffer grows */
+  const burst = 0.020 * Math.min(1.6, Math.max(0, util-0.75))
+                     / Math.pow(2, (t.bufPreset-1)*0.42);
+
+  return {inflow, cap, util, sustained, burst, dropP:Math.min(0.92, sustained+burst),
+          passRatio:Math.min(0.93, KERNEL_PASS*SET_MUL[t.syscallSet])};
+}
 
 /* ============================================================
    9. simulation step
    ============================================================ */
 function step(dt){
   const load = S.load;
-  const dropP = Math.max(0, (load-1.15)) * 0.075 + DROP_BASE;
+  const M = model();
+  const dropP = S.dead ? 0 : M.dropP;
   const drvMul = S.driver==='modern_ebpf' ? 1 : (S.driver==='ebpf' ? 0.92 : 0.84);
 
   for(let i=0;i<N;i++){
@@ -4838,7 +4984,8 @@ function step(dt){
         if(p.gated !== true && p.x >= X_DRIVER){
           p.gated = true;
           S.counters.sys++;
-          if(Math.random() > KERNEL_PASS){ p.st=3; p.fade=1; }  // dropped in-kernel
+          /* base_syscalls decides how much the driver forwards at all */
+          if(Math.random() > M.passRatio){ p.st=3; p.fade=1; }   // not in the syscall set
           else { S.counters.ring++; setCol(i, C.falco, 0.62); }
         }
 
@@ -4851,6 +4998,7 @@ function step(dt){
             if(Math.random() < dropP){
               p.st = 1; p.fade = 1;
               S.counters.drop++;
+              onDrop();
               setCol(i, C.redUi);
             }
           }
@@ -4977,15 +5125,64 @@ const RULES_LOG = [
   ['Search Private Keys or Passwords', 2, 'proc=grep args=-r BEGIN RSA'],
   ['Change thread namespace', 3, 'proc=nsenter'],
   ['Non sudo setuid', 2, 'proc=node uid=0'],
-  /* 4th element = k8saudit source → no syscall-side k8s.pod suffix */
-  ['K8s Secret Get Successfully', 2, 'ka.user=svc/deployer ka.target.name=db-creds ka.target.namespace=payments', true],
-  ['Create Privileged Pod', 0, 'ka.user=svc/ci ka.target.name=debug-pod ka.target.namespace=payments', true]
+  /* 4th element = plugin event source (not syscalls) → no syscall-side k8s.pod
+     suffix, and these are the ONLY rules that can fire in kernel-less mode */
+  ['K8s Secret Get Successfully', 2, 'ka.user=svc/deployer ka.target.name=db-creds ka.target.namespace=payments', 'k8saudit'],
+  ['Create Privileged Pod', 0, 'ka.user=svc/ci ka.target.name=debug-pod ka.target.namespace=payments', 'k8saudit'],
+  ['Attach/Exec Pod', 2, 'ka.user=alice@corp ka.target.name=api-7f9c ka.target.namespace=payments', 'k8saudit'],
+  ['ClusterRole With Write Privileges Created', 1, 'ka.user=svc/ci ka.target.name=edit-all', 'k8saudit'],
+  ['Console Login Without MFA', 1, 'aws.user=ops-admin aws.region=ap-northeast-1 mfa=false', 'cloudtrail'],
+  ['Delete Bucket Encryption', 0, 'aws.user=svc/deploy aws.bucket=prod-artifacts', 'cloudtrail'],
+  ['Put Bucket ACL Public Read/Write', 0, 'aws.user=svc/deploy aws.bucket=prod-logs acl=public-read-write', 'cloudtrail'],
+  ['CloudTrail Trail Deleted', 0, 'aws.user=root aws.region=us-east-1 trail=org-trail', 'cloudtrail'],
+  ['Okta User Account Locked', 3, 'okta.actor=bob@corp okta.attempts=8', 'okta'],
+  ['Github Secret Pushed', 1, 'github.repo=corp/api github.user=carol type=aws_key', 'github']
 ];
 const NS = ['payments','checkout','default','kube-system','ingress','data-eng'];
 const PODS = ['api-7f9c','worker-2b1','nginx-5dd','etl-9ac','auth-3e8','cache-c17'];
 
 const clog = document.getElementById('clog');
-let logCooldown = 0, logQueue = [];
+let logCooldown = 0, logQueue = [], dropCool = 0;
+const metaQueue = [];          // falco's own messages (drops, exit, restart)
+
+function nowTs(){
+  const n = new Date();
+  return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`
+       + `:${String(n.getSeconds()).padStart(2,'0')}.${String(n.getMilliseconds()).padStart(3,'0')}`;
+}
+function appendLine(html){
+  const el = document.createElement('div');
+  el.innerHTML = html;
+  clog.appendChild(el);
+  while(clog.children.length > 26) clog.removeChild(clog.firstChild);
+}
+
+/* syscall_event_drops.actions — the point being that `ignore` is a choice
+   to be blind, and `exit` is a choice to fail loudly rather than silently. */
+function onDrop(){
+  const act = S.tune.dropAction;
+  if(act === 'ignore') return;
+  S.deadDrops++;
+  if(act === 'exit' && !S.dead && S.deadDrops >= 15){ die(); return; }
+  if(dropCool > 0) return;
+  dropCool = 2.2;
+  const n = S.counters.drop;
+  if(act === 'log')
+    metaQueue.push({cls:'kv', text:`falco: ${n} syscall event drops so far (actions: log)`});
+  else
+    metaQueue.push({cls:'p-err', text:`Critical Falco internal: syscall event drops — ${n} events lost (actions: alert)`});
+}
+function die(){
+  S.dead = true;
+  metaQueue.push({cls:'p-err',
+    text:'falco: too many consecutive syscall event drops — actions: exit → agent stopped. 検知は止まりました。'});
+}
+function revive(){
+  if(!S.dead) return;
+  S.dead = false; S.deadDrops = 0;
+  for(let i=0;i<N;i++) spawn(i, Math.random()*1.6);
+  metaQueue.push({cls:'sys', text:'falco restarted — detection resumed'});
+}
 
 function emitLog(prio){
   if(logQueue.length > 6) return;
@@ -4993,28 +5190,35 @@ function emitLog(prio){
 }
 function flushLog(dt){
   logCooldown -= dt;
-  if(logCooldown > 0 || !logQueue.length) return;
+  dropCool -= dt;
+  /* falco's own messages jump the queue — they are not rule matches */
+  if(metaQueue.length){
+    const m = metaQueue.shift();
+    appendLine(`<span class="ts">${nowTs()}</span> <span class="${m.cls}">${m.text}</span>`);
+  }
+  if(logCooldown > 0 || !logQueue.length || S.dead) return;
   logCooldown = 0.42 + Math.random()*0.5;
   const prio = logQueue.shift();
-  const cand = RULES_LOG.filter(r=>r[1]===prio);
-  const r = (cand.length?cand:RULES_LOG)[(Math.random()*(cand.length||RULES_LOG.length))|0];
-  const now = new Date();
-  const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+  /* kernel-less means no syscall rules can fire at all — only plugin sources */
+  const pluginOnly = S.deploy === 'plugins';
+  const ok = r => !pluginOnly || !!r[3];
+  let pool = RULES_LOG.filter(r => r[1]===prio && ok(r));
+  if(!pool.length) pool = RULES_LOG.filter(ok);
+  if(!pool.length) pool = RULES_LOG;
+  const r = pool[(Math.random()*pool.length)|0];
+  const ts = nowTs();
   const p = PRIO[r[1]];
   const ns = NS[(Math.random()*NS.length)|0], pod = PODS[(Math.random()*PODS.length)|0];
-  const ctx = r[3] ? r[2] : `${r[2]} k8s.ns=${ns} k8s.pod=${pod}`;
-  const line = document.createElement('div');
-  line.innerHTML =
-    `<span class="ts">${ts}</span> <span class="${p.cls}">${p.name}</span> ${r[0]} `+
-    `<span class="kv">(${ctx})</span>`;
-  clog.appendChild(line);
+  /* a plain host has container metadata but no Kubernetes metadata to enrich with */
+  const ctx = r[3] ? r[2]
+            : S.deploy === 'k8s' ? `${r[2]} k8s.ns=${ns} k8s.pod=${pod}`
+            : `${r[2]} container.id=${(0x100000+((Math.random()*0xefffff)|0)).toString(16)}`;
+  appendLine(`<span class="ts">${ts}</span> <span class="${p.cls}">${p.name}</span> ${r[0]} `+
+             `<span class="kv">(${ctx})</span>`);
   if(S.mode==='sysdig' && Math.random()<0.3){
-    const l2 = document.createElement('div');
-    l2.innerHTML = `<span class="ts">${ts}</span> <span class="sys">sysdig</span> `+
-      `<span class="kv">policy=Sysdig Runtime Threat Detection · capture=stored · in-use CVE correlated</span>`;
-    clog.appendChild(l2);
+    appendLine(`<span class="ts">${ts}</span> <span class="sys">sysdig</span> `+
+      `<span class="kv">policy=Sysdig Runtime Threat Detection · capture=stored · in-use CVE correlated</span>`);
   }
-  while(clog.children.length > 26) clog.removeChild(clog.firstChild);
 }
 
 /* ============================================================
@@ -5160,22 +5364,70 @@ tour.appendChild(reset);
 /* ============================================================
    14. controls: mode / driver / load / console
    ============================================================ */
+/* fade a whole subtree without touching anyone else's materials */
+function setDim(root, f){
+  if(!root) return;
+  root.traverse(o=>{
+    if(o.material && o.material.opacity !== undefined){
+      if(o.userData._o0 === undefined) o.userData._o0 = o.material.opacity;
+      o.material.transparent = true;
+      o.material.opacity = o.userData._o0 * f;
+    }
+  });
+}
+
+function consoleTitle(){
+  if(S.deploy === 'plugins')
+    return S.mode==='sysdig' ? 'sysdig · plugin sources only (no driver)'
+                             : 'falco --disable-source syscall';
+  if(S.mode === 'sysdig')
+    return S.deploy==='host' ? 'sysdig agent (host) · policies from Sysdig Secure'
+                             : 'sysdig agent (DaemonSet) · policies from Sysdig Secure';
+  return S.deploy==='host' ? 'systemctl status falco · falco.service'
+                           : 'kubectl logs -n falco ds/falco';
+}
+
 function setMode(m){
   S.mode = m;
   [...document.querySelectorAll('#modeSeg button')].forEach(b=>
     b.classList.toggle('on', b.dataset.mode===m));
-  document.getElementById('ctitle').textContent =
-    m==='sysdig' ? 'sysdig agent · policies from Sysdig Secure' : 'falco -o json_output=false';
-  if(sysdigGroup){
-    sysdigGroup.traverse(o=>{
-      if(o.material && o.material.opacity !== undefined){
-        if(o.userData._o0 === undefined) o.userData._o0 = o.material.opacity;
-        o.material.transparent = true;
-        o.material.opacity = o.userData._o0 * (m==='sysdig' ? 1 : 0.16);
-      }
-    });
-  }
+  document.getElementById('ctitle').textContent = consoleTitle();
+  setDim(sysdigGroup, m==='sysdig' ? 1 : 0.16);
 }
+
+/* ---------- deployment topology ----------
+   host     : package + systemd on a node. No k8s metadata to enrich with.
+   k8s      : DaemonSet. container + k8s metadata both available.
+   plugins  : no driver, no ring buffer at all — only plugin event sources
+              feed the rules engine. This is how you run Falco where you
+              cannot touch the kernel. */
+function setDeploy(dep){
+  S.deploy = dep;
+  [...document.querySelectorAll('#deploySeg button')].forEach(b=>
+    b.classList.toggle('on', b.dataset.dep===dep));
+
+  const kernelPath = dep !== 'plugins';
+  setDim(districtObjs.driver.group,    kernelPath ? 1 : 0.07);
+  setDim(districtObjs.ring.group,      kernelPath ? 1 : 0.07);
+  setDim(districtObjs.workloads.group, kernelPath ? 1 : 0.10);
+  setDim(stateRefs.gantries.k8s,       dep === 'k8s' ? 1 : 0.08);
+  /* the plugin lane is the whole story in kernel-less mode, so light it up */
+  setDim(districtObjs.plugins.group,   dep === 'plugins' ? 1 : 0.72);
+
+  // the driver choice is meaningless without a driver
+  document.querySelectorAll('#drvSeg button').forEach(b=>{
+    b.disabled = !kernelPath;
+    b.style.opacity = kernelPath ? '' : '.35';
+    b.style.cursor  = kernelPath ? '' : 'not-allowed';
+  });
+
+  document.getElementById('ctitle').textContent = consoleTitle();
+  tagEls.sysdig && updateTags();
+  for(let i=0;i<N;i++) spawn(i, Math.random()*2.2);   // reroute everything
+  onTuneChange();
+}
+document.querySelectorAll('#deploySeg button').forEach(b=>
+  b.onclick = ()=> setDeploy(b.dataset.dep));
 document.querySelectorAll('#modeSeg button').forEach(b=>
   b.onclick = ()=>setMode(b.dataset.mode));
 
@@ -5190,6 +5442,7 @@ document.querySelectorAll('#drvSeg button').forEach(b=>
       mm.material.color.setHex(on ? C.falco : C.g20);
       mm.material.opacity = on ? 0.95 : 0.4;
     });
+    onTuneChange();          // driver choice also changes drain capacity
   });
 
 const loadRange = document.getElementById('loadRange');
@@ -5197,7 +5450,83 @@ const loadVal = document.getElementById('loadVal');
 loadRange.oninput = ()=>{
   S.load = loadRange.value/100;
   loadVal.textContent = '×'+S.load.toFixed(1);
+  onTuneChange();
 };
+
+/* ---------- tuning panel ---------- */
+const BUF_LBL = document.getElementById('tBufV');
+const SET_LBL = document.getElementById('tSetV');
+const CPU_LBL = document.getElementById('tCpuV');
+const rngBuf  = document.getElementById('rngBuf');
+
+function segWire(sel, attr, apply){
+  document.querySelectorAll(sel+' button').forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelectorAll(sel+' button').forEach(x=>x.classList.toggle('on', x===b));
+      apply(b.dataset[attr]);
+      onTuneChange();
+    };
+  });
+}
+segWire('#segSet', 'set', v => S.tune.syscallSet = v);
+segWire('#segCpu', 'cpu', v => S.tune.cpusPerBuf = +v);
+segWire('#segAct', 'act', v => { S.tune.dropAction = v; S.deadDrops = 0; });
+
+rngBuf.oninput = ()=>{ S.tune.bufPreset = +rngBuf.value; onTuneChange(); };
+document.getElementById('chkSlow').onchange = e=>{
+  S.tune.slowOutput = e.target.checked; onTuneChange();
+};
+document.getElementById('tReset').onclick = ()=>{
+  S.tune = {...TUNE_DEFAULTS};
+  S.load = 1.0; loadRange.value = 100; loadVal.textContent = '×1.0';
+  rngBuf.value = TUNE_DEFAULTS.bufPreset;
+  document.getElementById('chkSlow').checked = false;
+  const on = (sel, attr, val)=> document.querySelectorAll(sel+' button').forEach(b=>
+    b.classList.toggle('on', b.dataset[attr] === String(val)));
+  on('#segSet','set',TUNE_DEFAULTS.syscallSet);
+  on('#segCpu','cpu',TUNE_DEFAULTS.cpusPerBuf);
+  on('#segAct','act',TUNE_DEFAULTS.dropAction);
+  onTuneChange();
+};
+
+/* any tuning change is also the way out of the `exit` state */
+function onTuneChange(){
+  const t = S.tune;
+  BUF_LBL.textContent = `${t.bufPreset} · ${PRESET_MIB(t.bufPreset)} MiB/CPU`;
+  SET_LBL.textContent = t.syscallSet === 'custom' ? 'custom_set' : t.syscallSet;
+  CPU_LBL.textContent = `${t.cpusPerBuf} → ${8/t.cpusPerBuf} buffers`;
+  revive();
+  applyTuneVisuals();
+  updateVerdict(model());     // don't wait for the next HUD tick
+}
+
+/* reshape the ring buffer district so the config is visible in the model */
+function applyTuneVisuals(){
+  const t = S.tune;
+  // buffer size → depth of the shared-memory volume and the lane walls
+  const s = 0.45 + (t.bufPreset-1) * 0.30;
+  if(ringRefs.shm){
+    ringRefs.shm.scale.y = s;
+    ringRefs.shm.position.y = 3.9 * s;
+  }
+  ringRefs.walls.forEach(w=>{ w.scale.y = s; w.position.y = 0.9 * s; });
+
+  // cpus_for_each_syscall_buffer → which lanes share one buffer
+  ringRefs.troughs.forEach((tr,i)=>{
+    const grp = Math.floor(i / t.cpusPerBuf);
+    tr.material.color.setHex(grp % 2 ? 0xD3D7DA : C.g10);
+  });
+  ringRefs.caps.forEach((c,i)=>{
+    const grp = Math.floor(i / t.cpusPerBuf);
+    c.material.color.setHex(grp % 2 ? C.g40 : C.g30);
+  });
+
+  // a synchronous output blocks the consumer — mark the pipes
+  outRefs.pipes.forEach((p,i)=>{
+    if(i === 2) return;                       // falcosidekick lane stays green
+    p.material.color.setHex(t.slowOutput ? C.redUi : C.g20);
+  });
+}
 
 const cbox = document.getElementById('consoleBox');
 document.getElementById('ctoggle').onclick = ()=> cbox.classList.toggle('open');
@@ -5313,6 +5642,34 @@ function updateHud(dt){
   els.rules.textContent = fmt(S.shown.rules);
   els.alert.textContent = Math.round(apm);
   els.drop.className = dropPct > 0.2 ? 'red' : 'dark';
+  updateVerdict(model());
+}
+
+/* The teaching payload: name WHICH failure mode you are looking at,
+   because the two have different fixes. */
+const elUtil = document.getElementById('mUtil');
+const elVerdict = document.getElementById('mVerdict');
+function updateVerdict(M){
+  elUtil.textContent = Math.round(M.util*100)+'%';
+  elUtil.className = M.util > 1 ? 'red' : 'dark';
+  let cls, txt;
+  if(S.dead){
+    cls = 'dead';
+    txt = 'falco が <b>exit</b> しました。検知はゼロです。負荷か設定を変えると再起動します。';
+  } else if(M.sustained > 0.004){
+    cls = 'sustained';
+    txt = `持続的な入力超過（消費能力の <b>${Math.round(M.util*100)}%</b>）。`
+        + `<b>バッファを増やしても直りません</b> — base_syscalls を custom_set に絞る、`
+        + `cpus_for_each_syscall_buffer を 1 にする、slow output を外す。`;
+  } else if(M.burst > 0.0015){
+    cls = 'burst';
+    txt = 'バースト起因のドロップ。平均は足りているので <b>buf_size_preset を上げれば効きます</b>。';
+  } else {
+    cls = 'ok';
+    txt = 'ドロップなし。消費が入力に追いついています。';
+  }
+  elVerdict.className = 'verdict '+cls;
+  elVerdict.innerHTML = txt;
 }
 function fmt(n){
   if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
@@ -5376,6 +5733,7 @@ window.__city = {
   step, S, DISTRICTS, select, setMode,
   frames:0,
   pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); flushLog(dt); updateHud(dt); } },
+  model, onTune:onTuneChange, setDeploy,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
   camDist(){ return camera.position.distanceTo(controls.target); },
@@ -5386,6 +5744,8 @@ window.__city = {
 /* init */
 setMode('oss');
 document.querySelector('#drvSeg button').click();
+setDeploy('k8s');
+onTuneChange();
 drawMinimap();
 frame();
 setTimeout(()=> document.getElementById('loader').classList.add('gone'), 620);

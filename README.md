@@ -59,9 +59,58 @@ python3 -m http.server 8722
 
 - ドラッグでオービット / スクロールでズーム / 地区をクリックで詳細
 - **STACK** — `Falco OSS` ↔ `+ Sysdig`。Sysdig 側にすると上空のプラットフォームが点灯し、Lumin のポリシー粒子が降りてくる
-- **DRIVER** — 3方式の切り替え（スループットにわずかに反映される）
-- **NODE LOAD** — ノード負荷。**×1.15 を超えるとリングバッファでドロップが発生し、HUD の event drops が赤くなる**。この教材の一番の勘所
+- **DEPLOY** — デプロイ形態（後述）
+- **DRIVER** — 3方式の切り替え（消費能力にわずかに反映される。kernel-less では選択不可になる）
+- **NODE LOAD** — ノード負荷。上げるとドロップが出る
+- **TUNING** — falco.yaml のチューニング（後述）。この教材の本体
 - **Console** — Falco の実際のルール名で流れるアラート出力。Sysdig モードでは policy / capture / in-use CVE 相関の行も混ざる
+
+## DEPLOY — デプロイ形態で都市の形が変わる
+
+| 選択 | 何が変わるか |
+|---|---|
+| `K8s DaemonSet` | 既定。container と k8s の両方のメタデータ用ガントリーが点灯し、アラートに `k8s.ns` / `k8s.pod` が付く |
+| `Host (systemd)` | ノードにパッケージ導入した構成。**k8s メタデータのガントリーが消え**、アラートは `container.id` までしか持たない |
+| `Kernel-less` | ドライバもリングバッファも使わない構成。**ワークロード・ドライバ・リングバッファの3地区が消灯し、リングバッファ流入が実測 0 になる**。プラグイン入力（k8saudit / cloudtrail / okta / github）だけがルールエンジンに届き、syscall 系ルールは1つも発火しない |
+
+「カーネルに触れない環境でも Falco は使えるが、そのとき何を見られて何を見られないか」が形で分かる。
+
+## TUNING — ドロップは2種類ある、というのが一番の学び
+
+ドロップが出たときに触れるレバーを載せてある。要点は **効くレバーと効かないレバーがある**こと。
+
+| レバー | 対応する設定 | 効果 |
+|---|---|---|
+| `base_syscalls` | all / default / custom_set | ドライバが転送する量そのもの。**持続超過に効く唯一のレバー** |
+| `buf_size_preset` | 1–10（4 = 8 MiB/CPU が既定） | リングバッファのサイズ。**バーストにだけ効く** |
+| `cpus_for_each_syscall_buffer` | 1 / 2 / 4 | バッファを共有する CPU 数。1 にすると消費能力が上がる |
+| `slow output` | 同期 program / http 出力 | オンにすると消費能力が半減し、**syscall 量が普通でもドロップする** |
+| `syscall_event_drops.actions` | ignore / log / alert / exit | ドロップを検知したときの振る舞い |
+
+HUD の `drain utilisation` と判定バンドが、いまどちらの状態かを名指しする:
+
+- **持続的な入力超過**（util > 100%）— 失う割合は `1 - 消費能力/入力`。バッファをいくら増やしても直らない
+- **バースト起因** — 平均は足りている。`buf_size_preset` を上げれば直る
+- **ドロップなし**
+
+### 実測した挙動
+
+| 条件 | ドロップ | util | 判定 |
+|---|---|---|---|
+| 既定 (load ×1.0) | 0% | 65% | ドロップなし |
+| load ×1.5 | 0.38% | 97% | バースト |
+| load ×1.5 + `buf_size_preset 9` | 0.03% | 97% | **バッファが効いた** |
+| `base_syscalls: all` (load ×1.0) | 14% | 119% | 持続超過 |
+| load ×2.5 | 28.7% | 161% | 持続超過 |
+| load ×2.5 + `buf_size_preset 10` (512 MiB) | 27.4% | 161% | **まったく効かない** |
+| load ×2.5 + `custom_set` | 0% | 65% | **これが効く** |
+| load ×1.0 + slow output | 28.5% | 166% | 持続超過 |
+
+「バッファを増やしたのに直らない → Falco は速度に追いつけない」という誤診を潰すのが狙い。
+
+### syscall_event_drops.actions を `exit` にすると
+
+ドロップが続くとエージェントが停止する。停止中は**リングバッファ流入 0・アラート 0** で、検知が本当にゼロになる（`ignore` は「黙って盲目になる」ことを選ぶのと同じ、という対比）。負荷か設定を変えると再起動する。
 
 ## パーティクルの色
 
@@ -90,10 +139,13 @@ HUD の数字は **illustrative（見せるための代表値）**。パネル�
 コンソールから直接いじれる:
 
 ```js
-__city.S.load = 3.0        // 負荷を上げてドロップを見せる
-__city.setMode('sysdig')   // Sysdig レイヤを点灯
-__city.select('ring')      // 地区へ飛ぶ
-__city.pump(600)           // rAF なしでシミュレーションを進める（検証用）
+__city.S.load = 2.5; __city.onTune()          // 負荷を上げてドロップを見せる
+__city.S.tune.syscallSet='custom'; __city.onTune()  // 絞って直す
+__city.setDeploy('plugins')                   // kernel-less に切り替え
+__city.setMode('sysdig')                      // Sysdig レイヤを点灯
+__city.select('ring')                         // 地区へ飛ぶ
+__city.model()                                // inflow / cap / util / dropP を見る
+__city.pump(600)                              // rAF なしでシミュレーションを進める（検証用）
 ```
 
 `window.__errs` に未捕捉エラーが溜まる。
