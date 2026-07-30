@@ -4142,7 +4142,7 @@ const DISTRICTS = [
     hoverT:'WORKLOADS / PROCESSES', hoverS:'コンテナ・Pod・ホストのプロセス — すべての起点',
     hoverM:['execve · openat · connect · ptrace','~80 interesting syscalls'],
     jp:'ワークロード', en:'workloads / processes',
-    x0:-84,x1:-62,z0:-19,z1:19, top:15, color:C.g20, cam:[-118,42,58],
+    x0:-84,x1:-62,z0:-19,z1:19, top:22, color:C.g20, cam:[-118,46,58],
     metrics:[['観測対象','syscall + 一部の非 syscall'],['改造','アプリ変更ゼロ']],
     body:`
 <h3>ここで何が起きているか</h3>
@@ -4284,6 +4284,13 @@ const DISTRICTS = [
     body:`
 <h3>エンジンは同じ。違うのは周辺</h3>
 <p>Sysdig エージェントは <strong>同じ libs（libscap / libsinsp）と同じ Falco エンジン</strong>を内蔵している。Falco はもともと Sysdig が作って CNCF に寄贈した。だから検知の芯は変わらない。差は、その周りに何があるか。</p>
+<h3>いまの構成は2コンポーネント（Sysdig Shield）</h3>
+<p>Classic Agent 方式を置き換える形で、導入は <strong>Host Shield</strong> と <strong>Cluster Shield</strong> の2つに集約されている。</p>
+<ul>
+<li><strong>Host Shield</strong> — ノード単位。Kubernetes では DaemonSet、単体ホストでは Linux バイナリ（パッケージ）やコンテナとしても入る。<span class="mark">この都市の 02〜06 の担当がここ</span>。ドライバは Universal eBPF（Linux 5.8+ 推奨）/ kmod（旧カーネル）/ Legacy eBPF（非推奨）</li>
+<li><strong>Cluster Shield</strong> — クラスタ単位で <em>1つ</em>（Deployment）。<code>admission_control</code> / <code>audit</code> / <code>container_vulnerability_management</code> / <code>posture</code> を担当する</li>
+</ul>
+<p>だから <strong>単体ホスト構成では Cluster Shield は存在しない</strong>。DEPLOY を切り替えると、この2つの箱が出たり消えたりする。</p>
 <h3>降りてくるもの — ポリシー</h3>
 <ul>
 <li>マネージドルールと Sysdig TRT（Threat Research Team）由来の脅威コンテンツが継続的に降りてくる</li>
@@ -4493,7 +4500,9 @@ let sysdigGroup = null;
 /* pieces the tuning panel reshapes at runtime */
 const ringRefs  = { shm:null, troughs:[], walls:[], caps:[] };
 const outRefs   = { pipes:[] };
-const stateRefs = { gantries:{} };
+const stateRefs  = { gantries:{} };
+/* west-end variants + the Sysdig Shield overlay, toggled by deploy / mode */
+const deployRefs = { wlK8s:null, wlHost:null, apiServer:null, clusterShield:null, hostShield:null };
 
 /* builder dispatch — BUILD_* are hoisted function declarations */
 const BUILD = {
@@ -4548,23 +4557,77 @@ DISTRICTS.forEach(d=>{
    6. builders
    ============================================================ */
 function BUILD_workloads(g,d,cx,cz){
-  // container "buildings" in a k8s-node grid
-  const rows=4, cols=3;
-  let i=0;
-  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
-    const x = d.x0+4.5 + c*6.6;
-    const z = d.z0+4.5 + r*9.2;
-    const h = 4 + ((i*37)%9) + (c===1?3:0);
-    const b = edged(4.4, h, 5.6, i%5===0?0xF3C99A:C.g20, 0.5);
-    put(b, x, h/2, z); g.add(b);
-    // pid accent
-    const a = box(1.1,1.1,1.1, i%4===0?C.orange:C.g40, 1);
-    put(a, x, h+1.1, z); g.add(a);
-    i++;
-  }
-  // node platform underneath
-  const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.85);
-  put(plat, cx, 0.36, cz); g.add(plat);
+  /* Two completely different west ends, because a cluster and a single host
+     are not the same picture. Both are built once and toggled by setDeploy. */
+
+  /* ---------- variant A: Kubernetes — three node pads in a cluster ---------- */
+  const k8s = new THREE.Group();
+  const NODE_Z = [-13, 0, 13];
+  NODE_Z.forEach((nz, n)=>{
+    const pad = box(24, 0.9, 10.4, C.g10, 0.95);
+    put(pad, cx, 0.45, nz); k8s.add(pad);
+    const rim = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(24, 0.9, 10.4)),
+      edgeMat(C.g20, 0.7));
+    put(rim, cx, 0.45, nz); k8s.add(rim);
+
+    // pods on the node
+    for(let c=0;c<5;c++){
+      const x = cx-9.6 + c*4.8;
+      const h = 3.2 + ((n*7+c*13)%5)*1.5;
+      const b = edged(3.2, h, 4.4, c%4===0 ? 0xF3C99A : C.g20, 0.52);
+      put(b, x, 0.9+h/2, nz); k8s.add(b);
+      const a = box(0.9,0.9,0.9, c%3===0 ? C.orange : C.g40, 1);
+      put(a, x, 0.9+h+0.9, nz); k8s.add(a);
+    }
+    // Host Shield / falco pod on every node — that is what a DaemonSet is
+    const ds = edged(2.6, 2.6, 2.6, C.falco, 0.92);
+    put(ds, cx+11.0, 0.9+1.3, nz); k8s.add(ds);
+    k8s.add(groundText('node-'+(n+1), cx-13.6, nz, 1.7,
+      {color:'#8A8C8E', mono:true, opacity:0.95, y:0.12}));
+  });
+  // cluster boundary
+  const cb = new THREE.Mesh(
+    new THREE.PlaneGeometry(30, 42),
+    new THREE.MeshBasicMaterial({color:C.falco, transparent:true, opacity:0.05, depthWrite:false}));
+  cb.rotation.x = -Math.PI/2; cb.position.set(cx, 0.02, cz); k8s.add(cb);
+  const cbl = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(30, 42)), edgeMat(C.falco, 0.5));
+  cbl.rotation.x = -Math.PI/2; cbl.position.set(cx, 0.03, cz); k8s.add(cbl);
+  k8s.add(groundText('KUBERNETES CLUSTER · 3 NODES · DAEMONSET', cx-14, d.z1+4, 2.0,
+    {color:'#00A8BC', mono:true, opacity:0.95}));
+  g.add(k8s);
+
+  /* ---------- variant B: one machine, no cluster ---------- */
+  const host = new THREE.Group();
+  const slab = box(26, 1.4, 34, C.g10, 0.96);
+  put(slab, cx, 0.7, cz); host.add(slab);
+  const slabRim = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(26, 1.4, 34)), edgeMat(C.g30, 0.6));
+  put(slabRim, cx, 0.7, cz); host.add(slabRim);
+  // fewer, taller, named host processes
+  const PROCS = [['systemd',13],['sshd',7],['nginx',16],['cron',5],
+                 ['postgres',19],['node',11],['dockerd',9],['rsyslog',6]];
+  PROCS.forEach(([nm,h],i)=>{
+    const x = cx - 9.5 + (i%4)*6.3;
+    const z = cz - 7.5 + Math.floor(i/4)*15;
+    const b = edged(4.0, h, 5.0, i%3===0 ? C.g30 : C.g20, 0.55);
+    put(b, x, 1.4+h/2, z); host.add(b);
+    const a = box(1.2,1.2,1.2, C.g50, 1);
+    put(a, x, 1.4+h+1.0, z); host.add(a);
+    host.add(groundText(nm, x-2.4, z+3.4, 1.5,
+      {color:'#8A8C8E', mono:true, opacity:0.9, y:1.5}));
+  });
+  // single Host Shield / falco.service
+  const svc = edged(4.4, 4.4, 4.4, C.falco, 0.92);
+  put(svc, cx+11.4, 1.4+2.2, cz); host.add(svc);
+  host.add(groundText('SINGLE HOST · falco.service (systemd)', cx-13, d.z1+4, 2.0,
+    {color:'#00A8BC', mono:true, opacity:0.95}));
+  g.add(host);
+
+  deployRefs.wlK8s = k8s;
+  deployRefs.wlHost = host;
+
   g.add(groundText('SYSCALLS', cx-1, d.z1+8, 5.0, {color:'#BBBDBF', opacity:0.4}));
   g.add(groundText('kernel boundary →', d.x1+3, d.z0-5, 2.6,
     {color:'#A3A5A7', mono:true, opacity:0.9}));
@@ -4722,15 +4785,32 @@ function BUILD_outputs(g,d,cx,cz){
 }
 
 function BUILD_plugins(g,d,cx,cz){
-  const names = ['k8saudit','cloudtrail','gcpaudit','okta','github'];
-  names.forEach((nm,i)=>{
-    const h = 4 + (i%3)*2.2;
-    const b = edged(3.4, h, 3.4, 0xF3C99A, 0.62);
-    put(b, d.x0+3.5 + (i%3)*6.2, h/2, d.z0+4 + Math.floor(i/3)*7.5);
-    g.add(b);
-  });
   const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.85);
   put(plat, cx, 0.36, cz); g.add(plat);
+
+  /* cloud / identity sources — available whatever the deployment is */
+  ['cloudtrail','okta','github','gcpaudit'].forEach((nm,i)=>{
+    const h = 4 + (i%3)*2.2;
+    const b = edged(3.4, h, 3.4, 0xF3C99A, 0.62);
+    put(b, d.x0+3.5 + (i%2)*6.2, 0.7+h/2, d.z0+4 + Math.floor(i/2)*7.5);
+    g.add(b);
+    g.add(groundText(nm, d.x0+1.7 + (i%2)*6.2, d.z0+7.6 + Math.floor(i/2)*7.5, 1.35,
+      {color:'#A3A5A7', mono:true, opacity:0.9, y:0.75}));
+  });
+
+  /* k8saudit needs an API server, so this half only exists on a cluster */
+  const api = new THREE.Group();
+  const srv = edged(4.2, 9, 4.2, C.falco, 0.6);
+  put(srv, d.x1-4.2, 0.7+4.5, d.z0+5); api.add(srv);
+  const audit = edged(3.4, 5, 3.4, 0xF3C99A, 0.7);
+  put(audit, d.x1-4.2, 0.7+2.5, d.z0+13); api.add(audit);
+  api.add(groundText('kube-apiserver', d.x1-8.4, d.z0+1.2, 1.5,
+    {color:'#00A8BC', mono:true, opacity:0.95, y:0.75}));
+  api.add(groundText('k8saudit', d.x1-6.2, d.z0+16.4, 1.5,
+    {color:'#A3A5A7', mono:true, opacity:0.9, y:0.75}));
+  g.add(api);
+  deployRefs.apiServer = api;
+
   g.add(groundText('PLUGINS', cx-1, d.z1+5.5, 4.2, {color:'#E0B183', opacity:0.5}));
   g.add(groundText('no driver · no ring buffer', cx-8, d.z0-4.5, 2.2,
     {color:'#A3A5A7', mono:true, opacity:0.9}));
@@ -4770,6 +4850,48 @@ function BUILD_sysdig(g,d,cx,cz){
   });
   sysdigGroup = g;
 }
+
+/* ============================================================
+   6b. Sysdig Shield overlay
+   Per Sysdig docs, Sysdig Shield is two components replacing the classic
+   agent: Host Shield (DaemonSet, standalone binary, or container — node
+   scoped) and Cluster Shield (Deployment — cluster scoped: admission
+   control, audit, container vulnerability management, posture).
+   Host Shield is the part that owns the districts we just walked through.
+   ============================================================ */
+(function shieldOverlay(){
+  /* HOST SHIELD — a boundary drawn around driver → outputs */
+  const hs = new THREE.Group();
+  const x0=-58, x1=86, z0=-24, z1=24, h=30;
+  const shell = new THREE.Mesh(
+    new THREE.BoxGeometry(x1-x0, h, z1-z0),
+    new THREE.MeshBasicMaterial({color:C.deepSee, transparent:true, opacity:0.035, depthWrite:false}));
+  shell.position.set((x0+x1)/2, h/2, (z0+z1)/2); hs.add(shell);
+  const shellL = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(x1-x0, h, z1-z0)), edgeMat(C.deepSee, 0.34));
+  shellL.position.copy(shell.position); hs.add(shellL);
+  hs.add(groundText('HOST SHIELD — node scoped', x0+2, z1+2.4, 2.4,
+    {color:'#01353E', mono:true, opacity:0.8}));
+  world.add(hs);
+  deployRefs.hostShield = hs;
+
+  /* CLUSTER SHIELD — a Deployment, so exactly one of it, beside the cluster */
+  const cs = new THREE.Group();
+  const deck = box(15, 1.2, 13, C.deepSee, 0.94);
+  put(deck, -73, 0.6, -40); cs.add(deck);
+  const rim = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(15,1.2,13)), edgeMat(C.lumin, 0.8));
+  put(rim, -73, 0.6, -40); cs.add(rim);
+  [['admission',-4.6,-3.4,7],['audit',0.6,-3.4,5],
+   ['posture',-4.6,3.4,6],['vuln mgmt',0.6,3.4,4.4]].forEach(([lbl,ox,oz,bh])=>{
+    const b = box(4.2, bh, 4.6, C.lumin, 0.9);
+    put(b, -73+ox, 1.2+bh/2, -40+oz); cs.add(b);
+  });
+  cs.add(groundText('CLUSTER SHIELD — cluster scoped (Deployment)', -84, -30.5, 2.1,
+    {color:'#01353E', mono:true, opacity:0.9}));
+  world.add(cs);
+  deployRefs.clusterShield = cs;
+})();
 
 /* ============================================================
    7. state + the drop model
@@ -5199,9 +5321,11 @@ function flushLog(dt){
   if(logCooldown > 0 || !logQueue.length || S.dead) return;
   logCooldown = 0.42 + Math.random()*0.5;
   const prio = logQueue.shift();
-  /* kernel-less means no syscall rules can fire at all — only plugin sources */
+  /* kernel-less: only plugin sources can fire.
+     plain host: no API server, so no k8saudit rules either. */
   const pluginOnly = S.deploy === 'plugins';
-  const ok = r => !pluginOnly || !!r[3];
+  const noCluster  = S.deploy === 'host';
+  const ok = r => (!pluginOnly || !!r[3]) && !(noCluster && r[3] === 'k8saudit');
   let pool = RULES_LOG.filter(r => r[1]===prio && ok(r));
   if(!pool.length) pool = RULES_LOG.filter(ok);
   if(!pool.length) pool = RULES_LOG;
@@ -5393,6 +5517,15 @@ function setMode(m){
     b.classList.toggle('on', b.dataset.mode===m));
   document.getElementById('ctitle').textContent = consoleTitle();
   setDim(sysdigGroup, m==='sysdig' ? 1 : 0.16);
+  applyShield();
+}
+
+/* Host Shield exists in every Sysdig deployment; Cluster Shield only where
+   there is a cluster to guard. Neither exists in plain OSS Falco. */
+function applyShield(){
+  const on = S.mode === 'sysdig';
+  if(deployRefs.hostShield)    deployRefs.hostShield.visible    = on && S.deploy !== 'plugins';
+  if(deployRefs.clusterShield) deployRefs.clusterShield.visible = on && S.deploy === 'k8s';
 }
 
 /* ---------- deployment topology ----------
@@ -5413,6 +5546,13 @@ function setDeploy(dep){
   setDim(stateRefs.gantries.k8s,       dep === 'k8s' ? 1 : 0.08);
   /* the plugin lane is the whole story in kernel-less mode, so light it up */
   setDim(districtObjs.plugins.group,   dep === 'plugins' ? 1 : 0.72);
+
+  /* the big one: a cluster of nodes, or a single machine */
+  if(deployRefs.wlK8s)  deployRefs.wlK8s.visible  = dep === 'k8s';
+  if(deployRefs.wlHost) deployRefs.wlHost.visible = dep === 'host';
+  /* k8s audit has no meaning without an API server to audit */
+  if(deployRefs.apiServer) deployRefs.apiServer.visible = dep !== 'host';
+  applyShield();
 
   // the driver choice is meaningless without a driver
   document.querySelectorAll('#drvSeg button').forEach(b=>{
@@ -5733,7 +5873,7 @@ window.__city = {
   step, S, DISTRICTS, select, setMode,
   frames:0,
   pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); flushLog(dt); updateHud(dt); } },
-  model, onTune:onTuneChange, setDeploy,
+  model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
   camDist(){ return camera.position.distanceTo(controls.target); },

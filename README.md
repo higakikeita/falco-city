@@ -67,13 +67,28 @@ python3 -m http.server 8722
 
 ## DEPLOY — デプロイ形態で都市の形が変わる
 
-| 選択 | 何が変わるか |
-|---|---|
-| `K8s DaemonSet` | 既定。container と k8s の両方のメタデータ用ガントリーが点灯し、アラートに `k8s.ns` / `k8s.pod` が付く |
-| `Host (systemd)` | ノードにパッケージ導入した構成。**k8s メタデータのガントリーが消え**、アラートは `container.id` までしか持たない |
-| `Kernel-less` | ドライバもリングバッファも使わない構成。**ワークロード・ドライバ・リングバッファの3地区が消灯し、リングバッファ流入が実測 0 になる**。プラグイン入力（k8saudit / cloudtrail / okta / github）だけがルールエンジンに届き、syscall 系ルールは1つも発火しない |
+西側の街並みそのものが作り替わる。
+
+| 選択 | 都市の姿 | 検知できるもの |
+|---|---|---|
+| `K8s DaemonSet` | **3つのノード台**が並び、各ノードに Pod が建ち、各ノードに1つずつ Host Shield / falco Pod が乗る（＝DaemonSet）。クラスタ境界の枠が引かれ、プラグイン地区に **kube-apiserver** が建つ | container + k8s 両方のガントリーが点灯。アラートに `k8s.ns` / `k8s.pod` が付く |
+| `Host (systemd)` | **1台の大きなマシン**に切り替わり、Pod の代わりに名前付きプロセス（systemd / sshd / nginx / postgres …）が高く建つ。Host Shield は1つだけ。**クラスタ境界も kube-apiserver も消える** | k8s メタデータのガントリーが消灯。アラートは `container.id` までしか持たず、**k8saudit ルールは1本も発火しない** |
+| `Kernel-less` | **ワークロード・ドライバ・リングバッファの3地区が消灯**。リングバッファ流入が実測 0 | プラグイン入力（k8saudit / cloudtrail / okta / github）だけがルールエンジンに届き、syscall 系ルールは1つも発火しない |
 
 「カーネルに触れない環境でも Falco は使えるが、そのとき何を見られて何を見られないか」が形で分かる。
+
+## Sysdig Shield（STACK を `+ Sysdig` にしたとき）
+
+[Sysdig Docs](https://docs.sysdig.com/en/docs/installation/sysdig-secure/install-agent-components/) の現行構成に合わせている。Classic Agent 方式を置き換える2コンポーネント。
+
+| コンポーネント | スコープ | 都市での表現 |
+|---|---|---|
+| **Host Shield** | ノード単位。K8s では DaemonSet、単体ホストでは Linux バイナリ（パッケージ）やコンテナ | 02〜06 の地区を囲む Deep See の境界として描かれる |
+| **Cluster Shield** | クラスタ単位で1つ（Deployment）。`admission_control` / `audit` / `container_vulnerability_management` / `posture` | クラスタの脇に建つ Deep See ＋ Lumin のデッキ |
+
+**`Host (systemd)` に切り替えると Cluster Shield は消える** — 守るクラスタが無いので存在しない。この対応関係が一番伝えたいところ。
+
+Host Shield のパッケージ導入時のドライバは Universal eBPF（Linux 5.8+ 推奨）/ kmod（旧カーネル）/ Legacy eBPF（非推奨）の3択（[Install Host Shield from a Package](https://docs.sysdig.com/en/sysdig-secure/install-package-host-shield/)）。Falco 側の `modern_ebpf` に相当するものを Sysdig は Universal eBPF と呼ぶ。
 
 ## TUNING — ドロップは2種類ある、というのが一番の学び
 
