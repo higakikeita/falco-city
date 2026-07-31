@@ -7,6 +7,7 @@
  * the ones it references without importing.
  */
 import { readdirSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 
 /* Blank out comments and string literals so the scan sees code only.
@@ -46,8 +47,22 @@ function codeOnly(s){
   return out;
 }
 
+/* Walk the whole tree, not just the top level. src/scenarios/ was invisible to
+ * this check while it was reading readdirSync('src') — and that is the one
+ * directory that grows by one file per content session, so it is exactly where
+ * a forgotten import would land. Keys are paths relative to src/, so the
+ * DOM-free list below can name a nested file. */
 const DIR = 'src';
-const files = readdirSync(DIR).filter(f => f.endsWith('.js'));
+function walk(dir, prefix = ''){
+  const out = [];
+  for(const e of readdirSync(dir, {withFileTypes:true})){
+    if(e.name.startsWith('.')) continue;
+    if(e.isDirectory()) out.push(...walk(`${dir}/${e.name}`, `${prefix}${e.name}/`));
+    else if(e.name.endsWith('.js')) out.push(`${prefix}${e.name}`);
+  }
+  return out;
+}
+const files = walk(DIR).sort();
 const src = Object.fromEntries(files.map(f => [f, readFileSync(`${DIR}/${f}`, 'utf8')]));
 
 /* names each module exports */
@@ -98,8 +113,14 @@ for(const [f, s] of Object.entries(src)){
   } else console.log(`ok    ${DIR}/${f}`);
 }
 /* Rules / rendering separation: campaign.js decides, ui.js draws. If game logic
- * starts reaching for the DOM the split stops being real, so assert it. */
-const DOM_FREE = ['campaign.js', 'state.js', 'layout.js'];
+ * starts reaching for the DOM the split stops being real, so assert it.
+ *
+ * scenarios/** is on the list as a directory rather than as filenames, because a
+ * scenario is pure data (scenarios/schema.js §purity) and the whole point is
+ * that a new one needs no entry anywhere. The same property is what lets
+ * scripts/regress.mjs run the game headless. */
+const DOM_FREE = ['campaign.js', 'state.js', 'layout.js',
+                  ...files.filter(f => f.startsWith('scenarios/'))];
 for(const f of DOM_FREE){
   if(!src[f]) continue;
   const body = codeOnly(src[f]);
@@ -112,5 +133,51 @@ for(const f of DOM_FREE){
   } else console.log(`ok    ${DIR}/${f} is DOM-free`);
 }
 
+/* The scenario registry drops an invalid file and reports it rather than taking
+ * the game down (scenarios/index.js). That is the right runtime behaviour and
+ * the wrong CI behaviour: a scenario nobody can play would ship silently. So
+ * pin the list to empty. This runs here rather than only in the regression
+ * harness because it needs no DOM at all — scenarios and their schema import
+ * nothing that touches the browser, and if that ever stops being true this
+ * import is where it surfaces.
+ *
+ * Referential errors (unknown step ids, unbuildable start.built) need the rule
+ * tables in campaign.js, which does need three and a DOM; scripts/regress.mjs
+ * starts all seven scenarios and re-checks the same list there. */
+process.removeAllListeners('warning');      // ESM-in-.js reparse notices only
+try {
+  const { SCENARIO_ERRORS, SCENARIOS } =
+    await import(pathToFileURL(`${process.cwd()}/${DIR}/scenarios/index.js`).href);
+  if(SCENARIO_ERRORS.length){
+    bad++;
+    console.log(`FAIL  ${DIR}/scenarios: ${SCENARIO_ERRORS.length} invalid scenario(s)`);
+    for(const e of SCENARIO_ERRORS) console.log(`        ${e}`);
+  } else {
+    console.log(`ok    ${DIR}/scenarios: ${SCENARIOS.length} valid, 0 errors`);
+  }
+  /* A scenario file that index.js does not import is content nobody can reach.
+   * Parking one is legitimate (2d9ca9b unregistered rules-not-followed because
+   * its example rule turned out to be bundled after all), so this cannot be a
+   * failure — but an unreachable file is invisible otherwise, and two of them
+   * arrived without anyone noticing. Say it out loud instead. */
+  const known = new Set(SCENARIOS.map(s => s.id));
+  const orphans = files
+    .filter(f => f.startsWith('scenarios/')
+              && !['scenarios/index.js', 'scenarios/schema.js'].includes(f))
+    .filter(f => !known.has(f.slice('scenarios/'.length, -3)));
+  if(orphans.length){
+    console.log(`note  ${orphans.length} scenario file(s) are not registered in `
+              + `${DIR}/scenarios/index.js — nobody can play them:`);
+    for(const o of orphans) console.log(`        ${DIR}/${o}`);
+    console.log('        Deliberate? Say so in the file. Otherwise add the import.');
+  }
+} catch (e) {
+  bad++;
+  console.log(`FAIL  ${DIR}/scenarios could not be loaded without a DOM`);
+  console.log(`        ${e.message}`);
+  console.log('        scenarios and schema.js must stay importable in plain Node.');
+}
+
 if(bad){ console.error(`\ncheck-imports: ${bad} problem(s)`); process.exit(1); }
-console.log('\nall modules import what they use, and the rules layer holds no DOM');
+console.log(`\nall ${files.length} modules import what they use, `
+          + 'the rules layer holds no DOM, and every scenario validates');
