@@ -2,6 +2,8 @@
 
 **▸ https://higakikeita.github.io/falco-city/**
 
+複数セッションで並行開発しています。担当境界と運用ルールは [HANDOFF-PM.md](HANDOFF-PM.md) が正。
+
 `syscall → alert` のパイプラインを、歩ける 3D の「都市」として表現したインタラクティブモデル。
 登壇・ウェビナー・顧客説明で「Falco と Sysdig が実際に何をしているか」を1画面で見せるためのもの。
 
