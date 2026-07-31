@@ -21,7 +21,7 @@
 export default {
   id:'slow-output',
   title:'負荷は普通なのに落ちる',
-  order:40,
+  order: 25,
   blurb:'街は全部建っている。負荷は <b>×1.0</b>、<code>base_syscalls</code> も <code>default</code>。'+
         'それでもドロップが出て、1段見逃している。',
 

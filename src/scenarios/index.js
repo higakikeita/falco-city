@@ -16,6 +16,7 @@ import { normalize, validateShape } from './schema.js';
 import greenfield from './greenfield.js';
 import inheritedAllSyscalls from './inherited-all-syscalls.js';
 import standaloneK8sRules from './standalone-k8s-rules.js';
+import slowOutput from './slow-output.js';
 import rulesNotFollowed from './rules-not-followed.js';
 import eyesButNoHands from './eyes-but-no-hands.js';
 import aDifferentSource from './a-different-source.js';
@@ -23,6 +24,7 @@ import aDifferentSource from './a-different-source.js';
 const RAW = [
   greenfield,
   inheritedAllSyscalls,
+  slowOutput,
   standaloneK8sRules,
   rulesNotFollowed,
   eyesButNoHands,
