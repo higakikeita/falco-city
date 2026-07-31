@@ -27,6 +27,17 @@ function setCol(i, hex, mul=1){
   col[i*3]=tmpC.r*mul; col[i*3+1]=tmpC.g*mul; col[i*3+2]=tmpC.b*mul;
 }
 
+/* A halted particle waits effectively forever. Named, because step() has to be
+   able to RECOGNISE it: clearing the flag has to bring the pipeline back, and
+   without that a resumed run stays silent (log.js §revive does the same job for
+   `dead`, and used to be the only way back).
+
+   HALT_MIN is the recognition threshold, and it exists because the first attempt
+   at this decremented the sentinel like any other delay — after ten seconds of
+   halt 1e9 had become 1e9-10, the `>= HALT` test stopped matching, and the
+   pipeline never came back. A halted particle does not age. */
+const HALT = 1e9, HALT_MIN = 1e6;
+
 function spawn(i, delay=0){
   const p = P[i] || (P[i]={});
   p.x = ST.start - Math.random()*10;
@@ -36,7 +47,10 @@ function spawn(i, delay=0){
   p.sp = 26 + Math.random()*20;
   p.st = 0;                     // 0 raw · 1 dropping · 2 matched · 3 dying
   p.lane = RING_LANES.length ? RING_LANES[(Math.random()*RING_LANES.length)|0] : 0;
-  p.delay = S.dead ? 1e9 : delay;   // agent stopped → nothing new enters the pipeline
+  /* Two endings stop the pipeline: the agent exited on drops (`dead`), or the run
+     is finished (`over` — points ran out). BOARD #48. sim.js only reads the flags,
+     so it needs no dependency on the scoring lane. */
+  p.delay = (S.dead || S.over) ? HALT : delay;
   p.fade = 1;
   p.prio = 0;
   /* per-pass gates — MUST be reset, particles are recycled */
@@ -142,12 +156,18 @@ polPoints.frustumCulled = false; scene.add(polPoints);
 function step(dt){
   const load = S.load;
   const M = model();
-  const dropP = S.dead ? 0 : M.dropP;
+  const dropP = (S.dead || S.over) ? 0 : M.dropP;
   const drvMul = S.driver==='modern_ebpf' ? 1 : (S.driver==='ebpf' ? 0.92 : 0.84);
 
   for(let i=0;i<N;i++){
     const p = P[i];
-    if(p.delay > 0){ p.delay -= dt; alp[i]=0; continue; }
+    if(p.delay > 0){
+      if(p.delay >= HALT_MIN){
+        /* halted: do not age, so the sentinel stays recognisable */
+        if(S.dead || S.over){ alp[i] = 0; continue; }
+        p.delay = Math.random()*1.5;      /* the halt was lifted — come back */
+      } else { p.delay -= dt; alp[i]=0; continue; }
+    }
 
     const speed = p.sp * (0.55 + load*0.6) * drvMul;
 
