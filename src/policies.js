@@ -44,6 +44,17 @@
  * are the sourced ones and the copies are the derived ones.
  */
 
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+   Contract §1: a bad input is an error VALUE, not an exception. Fuzzing the
+   eight files found the same shape in all of them — a collection argument that
+   was not a collection. `str()` absorbs Symbol, which `String()` throws on. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ---------------------------------------------------------------- maturity
    Three files, and file maps 1:1 to maturity. Only the stable set is loaded by
    default; incubating and sandbox are SEPARATE OCI ARTIFACTS you have to fetch,
@@ -603,7 +614,7 @@ const gateById     = id => GATES.find(g => g.id === id) || null;
 const ruleByName   = name => RULE_FACTS.find(r => r.name === name) || null;
 const maturityOf   = name => (ruleByName(name) || {}).maturity ?? null;
 
-const withDefaults = pol => ({ ...POLICY_DEFAULT, ...(pol || {}) });
+const withDefaults = pol => ({ ...POLICY_DEFAULT, ...obj(pol) });
 
 /* which maturities this policy loads */
 function maturitiesIn(pol){
@@ -645,7 +656,8 @@ function priorityShare(minPriority){
  * nothing to the queue, because those rules are not on the node. Having a
  * policy is not having a rule.
  */
-function policyNoiseMul(pol, ctx = {}){
+function policyNoiseMul(pol, ctxIn = {}){
+  const ctx = obj(ctxIn);
   const p = withDefaults(pol);
   const t = tierById(p.maturity);
   const artifacts = ctx.artifacts !== undefined ? !!ctx.artifacts : true;
@@ -662,12 +674,13 @@ function policyNoiseMul(pol, ctx = {}){
  * ctx.artifacts  false = falcoctl is missing or not working, so anything that
  *                needs a separate OCI artifact is not on the node
  * ctx.sources    which event sources deliver here. undefined = all of them     */
-function rulesLoaded(pol, ctx = {}){
+function rulesLoaded(pol, ctxIn = {}){
+  const ctx = obj(ctxIn);
   const p = withDefaults(pol);
   const want = maturitiesIn(p);
   const t = tierById(p.maturity);
   const artifacts = ctx.artifacts !== undefined ? !!ctx.artifacts : true;
-  const sources = ctx.sources || null;
+  const sources = arr(ctx.sources).length ? arr(ctx.sources) : null;
   return RULE_FACTS.filter(r => {
     if(sources && !sources.includes(r.source)) return false;
     if(r.maturity !== null){
@@ -686,8 +699,8 @@ function rulesLoaded(pol, ctx = {}){
    the detection engineer's decision. Exactly the seam the role layer is for. */
 function requiredSyscalls(pol, ctx = {}){
   const out = [];
-  for(const r of rulesLoaded(pol, ctx))
-    for(const s of (r.needsSyscalls || []))
+  for(const r of rulesLoaded(pol, obj(ctx)))
+    for(const s of arr(r.needsSyscalls))
       if(!out.includes(s)) out.push(s);
   return out.sort();
 }
@@ -709,8 +722,9 @@ function requiredSyscalls(pol, ctx = {}){
  * once, and a first-failure answer would hide the second one — which is the
  * mistake people actually make in the field.
  */
-function gatesFailed(rule, ctx = {}){
-  const r = typeof rule === 'string' ? ruleByName(rule) : rule;
+function gatesFailed(rule, ctxIn = {}){
+  const ctx = obj(ctxIn);
+  const r = typeof rule === 'string' ? ruleByName(rule) : (obj(rule).name ? rule : null);
   if(!r) return [{ gate:'have', why:'unknown-rule' }];
   const p = withDefaults(ctx.policy);
   const out = [];
@@ -737,24 +751,24 @@ function gatesFailed(rule, ctx = {}){
      blind only when every syscall it can match on is negated (campaign.js
      §blindSyscalls), and a null declaration is not a claim either way. */
   const need = r.needsSyscalls;
-  const off = ctx.negated || [];
+  const off = arr(ctx.negated);
   if(need && need.length && off.length && need.every(n => off.includes(n)))
     out.push({ gate:'traced', why:'syscalls-negated', syscalls:need.slice() });
 
   /* field — THE VERSION LAYER */
-  const na = (ctx.naFields || []).map(f => (typeof f === 'string' ? f : f.field));
-  const lost = (r.needsFields || []).filter(f => na.includes(f));
+  const na = arr(ctx.naFields).map(f => (typeof f === 'string' ? f : obj(f).field));
+  const lost = arr(r.needsFields).filter(f => na.includes(f));
   if(lost.length)
     out.push({ gate:'field', why:'reads-na', fields:lost });
 
   /* path — the source has to deliver, and the pipeline has to be standing.
      `districts` is optional: campaign.js scores this properly, and this is here
      so a caller with only a policy in hand still gets an honest answer. */
-  const sources = ctx.sources || null;
+  const sources = arr(ctx.sources).length ? arr(ctx.sources) : null;
   if(sources && !sources.includes(r.source))
     out.push({ gate:'path', why:'source-absent', source:r.source });
-  const districts = ctx.districts || null;
-  if(districts){
+  const districts = obj(ctx.districts);
+  if(Object.keys(districts).length){
     const chain = r.source === 'syscall'
       ? ['driver','ring','state','rules','outputs']
       : ['plugins','rules','outputs'];
@@ -766,7 +780,7 @@ function gatesFailed(rule, ctx = {}){
 
 /* does it ring. `gates` is why not, in order, and it is the interesting half */
 function ringsFor(rule, ctx = {}){
-  const failed = gatesFailed(rule, ctx);
+  const failed = gatesFailed(rule, obj(ctx));
   return { rings:failed.length === 0, gates:failed,
            silent:failed.every(f => (gateById(f.gate) || {}).silent) };
 }
@@ -776,19 +790,20 @@ function ringsFor(rule, ctx = {}){
    not depend on which side of ③ 守り方 you chose, and the way to keep that true
    is for the function that answers it to have no way of knowing. */
 function firingRules(ctx = {}){
-  return RULE_FACTS.filter(r => ringsFor(r, ctx).rings);
+  return RULE_FACTS.filter(r => ringsFor(r, obj(ctx)).rings);
 }
-const detectionCount = ctx => firingRules(ctx).length;
+const detectionCount = ctx => firingRules(obj(ctx)).length;
 
 /* ---------------------------------------------------------------- response */
 
 /* the response action this policy actually has. `real` is the whole question:
    choosing `kill` on the OSS side without building the hand is a choice with no
    consequence, and the model has to say so rather than quietly obeying. */
-function responseFor(pol, ctx = {}){
+function responseFor(pol, ctxIn = {}){
+  const ctx = obj(ctxIn);
   const p = withDefaults(pol);
   const a = actionById(p.response) || actionById('notify');
-  const districts = ctx.districts || {};
+  const districts = obj(ctx.districts);
   const bundle = managedById(p.managed);
   const fromBundle = !!(bundle && bundle.response.includes(a.id));
   const missing = a.needs.filter(k => !districts[k]);
@@ -825,7 +840,7 @@ function isFixed(id){
 const unregisteredClaims = () =>
   CLAIMS.filter(c => !c.invariant || c.status !== 'registered');
 const fixedOnly = (items, key = 'id') =>
-  (items || []).filter(x => isFixed(x && x[key]));
+  arr(items).filter(x => isFixed(x && x[key]));
 
 /* rules whose maturity / priority is NOT upstream-verified. A reviewer should be
    able to get this list without reading the table. */

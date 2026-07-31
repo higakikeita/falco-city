@@ -503,6 +503,17 @@ const ARCHETYPES = [
 ];
 
 
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+   Contract §1: a bad input is an error VALUE, not an exception. Fuzzing the
+   eight files found the same shape in all of them — a collection argument that
+   was not a collection. `str()` absorbs Symbol, which `String()` throws on. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ============================================================
    lookups
    ============================================================ */
@@ -558,7 +569,7 @@ const forcedAxisValue = (arch, axis) => {
    Takes the ids rather than the axis table, so districts.data.js does not have
    to be imported here (§規律 3). */
 const axisValuesFor = (arch, axis, valueIds) =>
-  (valueIds || []).filter(v => allowsAxisValue(arch, axis, v));
+  arr(valueIds).filter(v => allowsAxisValue(arch, axis, v));
 
 /* the driver is not one of the four environment axes but it is constrained the
    same way, and the node OS axis can forbid values underneath us too — so a
@@ -591,7 +602,7 @@ const forcedTuneValue = (arch, key) => {
    by the caller, so an archetype only says what it changes. */
 function tuneDefaultsFor(arch){
   const out = {};
-  const table = (arch && arch.policy && arch.policy.tune) || {};
+  const table = obj(obj(obj(arch).policy).tune);
   for(const [key, rule] of Object.entries(table)){
     if(typeof rule.forced === 'string') out[key] = rule.forced;
     else if(rule.default !== undefined && rule.default !== null) out[key] = rule.default;
@@ -601,7 +612,7 @@ function tuneDefaultsFor(arch){
 
 /* ---- districts ----------------------------------------------------------- */
 const forbiddenDistricts = arch =>
-  ((arch && arch.policy && arch.policy.districts && arch.policy.districts.forbidden) || []).slice();
+  arr(obj(obj(obj(arch).policy).districts).forbidden).slice();
 const allowsDistrict = (arch, id) => !forbiddenDistricts(arch).includes(id);
 
 /* Conditions that stay unsatisfied no matter how many asks you spend
@@ -610,11 +621,12 @@ const allowsDistrict = (arch, id) => !forbiddenDistricts(arch).includes(id);
    same condition on a connected estate is just a to-do. Returned parsed so no
    caller has to know the encoding. */
 function unsatisfiableRequirements(arch){
-  const list = (arch && arch.policy && arch.policy.unsatisfiable) || [];
-  return list.map(s => {
-    const cut = String(s).indexOf(':');
-    return cut < 0 ? { district:String(s), req:null }
-                   : { district:String(s).slice(0, cut), req:String(s).slice(cut+1) };
+  const list = arr(obj(obj(arch).policy).unsatisfiable);
+  return list.map(x => {
+    const t = str(x);
+    const cut = t.indexOf(':');
+    return cut < 0 ? { district:t, req:null }
+                   : { district:t.slice(0, cut), req:t.slice(cut+1) };
   });
 }
 /* the shape GAME.unmet / scenario start.unmet want: districtId -> [condition] */
@@ -630,9 +642,10 @@ function unmetFor(arch){
 /* ---- the estate --------------------------------------------------------- */
 /* Node COUNT and node SIZE are different axes and neither stands in for the
    other (INVARIANTS 3.6), so they are returned together and never merged. */
-const estateOf = arch => ({
-  nodes:arch.estate.nodes, cpus:arch.estate.cpus, lockCpus:!!arch.estate.lockCpus
-});
+const estateOf = arch => {
+  const e = obj(obj(arch).estate);
+  return { nodes:num(e.nodes, 1), cpus:num(e.cpus, 1), lockCpus:!!e.lockCpus };
+};
 /* 製造業 cannot buy a bigger node. Asking here rather than reading the flag
    keeps the reason in one place. */
 const canResizeNode = arch => !(arch && arch.estate && arch.estate.lockCpus);
