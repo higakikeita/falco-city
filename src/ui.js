@@ -14,6 +14,7 @@ import {
   SCENARIOS, activeScenario, activeEnv, startScenario, goalStatus,
   allowedDeploys, allowedDrivers
 } from './campaign.js';
+import { initMenu, plotTag, plotStyle } from './menu.js';
 
 
 /* ============================================================
@@ -44,10 +45,10 @@ function updateTags(){
     el.classList.toggle('hot', S.hovered===d.id || S.selected===d.id);
     el.classList.toggle('dim',
       d.id==='sysdig' && S.mode!=='sysdig');
-    /* a district that has not been built is not on the map at all */
+    /* A district that has not been built is drawn as a plot, not removed:
+       menu.js owns what "not built yet" looks like. */
     const unbuilt = GAME.on && !GAME.built.has(d.id);
-    el.style.display = unbuilt ? 'none' : '';
-    if(unbuilt) el.style.opacity = 0;
+    plotTag(el, d, unbuilt);
   }
 }
 
@@ -591,8 +592,23 @@ function drawMinimap(){
   mctx.beginPath(); mctx.moveTo(mx(-80),mz(0)); mctx.lineTo(mx(90),mz(0)); mctx.stroke();
 
   DISTRICTS.forEach(d=>{
-    if(GAME.on && !GAME.built.has(d.id)) return;
     const x=mx(d.x0), y=mz(d.z0), w=mx(d.x1)-mx(d.x0), h=mz(d.z1)-mz(d.z0);
+    /* PLAN is where an empty plot should read best: keep the outline, drop the
+       fill. menu.js decides which stage is the one to build next. */
+    if(GAME.on && !GAME.built.has(d.id)){
+      const up = plotStyle(d.id) !== 'plot';
+      mctx.setLineDash([3,2.5]);
+      mctx.globalAlpha = up ? 0.95 : 0.5;
+      mctx.strokeStyle = up ? '#000' : 'rgba(0,0,0,.34)';
+      mctx.lineWidth = up ? 1.3 : 0.8;
+      mctx.beginPath(); mctx.roundRect(x,y,w,h,3); mctx.stroke();
+      mctx.setLineDash([]);
+      mctx.fillStyle = up ? '#000' : 'rgba(0,0,0,.34)';
+      mctx.font = '400 7.5px "Share Tech Mono", monospace';
+      mctx.fillText(d.n, x+3, y+9.5);
+      mctx.globalAlpha = 1;
+      return;
+    }
     const active = S.selected===d.id || S.hovered===d.id;
     const dim = d.id==='sysdig' && S.mode!=='sysdig';
     mctx.globalAlpha = dim ? 0.2 : (active ? 0.9 : 0.42);
@@ -707,6 +723,10 @@ function fmt(n){
   if(n >= 1e3) return (n/1e3).toFixed(1)+'k';
   return Math.round(n).toString();
 }
+
+/* The entrance goes up last, so the button it adds to #uiModeSeg is wired after
+   the handlers above have already claimed that segment. */
+initMenu();
 
 export {
   tagEls,

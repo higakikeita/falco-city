@@ -499,12 +499,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     </div>
 
     <div class="trow">
-      <div class="tlbl">buf_size_preset <b id="tBufV">4 · 8 MiB/CPU</b></div>
+      <!-- 8 MiB is ONE buffer, not one per CPU: with modern_ebpf there is a
+           buffer per CPU *pair* (see the row below). It is also mapped twice in
+           virtual memory, so one buffer costs 16 MiB. controls.js rewrites this
+           value at init — that copy has to say the same thing. -->
+      <div class="tlbl">buf_size_preset <b id="tBufV">4 · 8 MiB/buffer</b></div>
       <input type="range" id="rngBuf" min="1" max="10" value="4">
     </div>
 
     <div class="trow">
-      <div class="tlbl">cpus_for_each_syscall_buffer <b id="tCpuV">2 → 4 buffers</b></div>
+      <!-- current key name; modern_ebpf only. The 2 → 4 example is falco.yaml's
+           own: 7 online CPUs at 2 CPUs per buffer gives ceil(7/2) = 4. -->
+      <div class="tlbl">engine.&lt;engine&gt;.cpus_for_each_buffer <b id="tCpuV">2 → 4 buffers</b></div>
       <div class="tseg" id="segCpu">
         <button data-cpu="1">1</button>
         <button data-cpu="2" class="on">2</button>
