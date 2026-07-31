@@ -11,13 +11,56 @@ import { C } from './palette.js';
 const edgeMat = (color, opacity) =>
   new THREE.LineBasicMaterial({color:color ?? C.g30, transparent:true, opacity:opacity ?? 0.34});
 
+
+/* ---------------------------------------------------------------- glow layer
+   Objects on BLOOM_LAYER are rendered a second time on their own, on black, and
+   that render is what gets blurred into the bloom (see scene.js). The selection
+   is by layer rather than by brightness because the city sits on a near-white
+   background: a luminance threshold would either bloom the sky or never reach
+   Falco Blue, which is only 0.63 luma. Layer membership says "this thing is a
+   light", and the additive combine then does the rest — a happy side effect
+   being that neutral greys clip against the white page and stay matte, so only
+   the meaningful colours actually glow. */
+const BLOOM_LAYER = 1;
+const glow = o => { o.traverse(c => c.layers.enable(BLOOM_LAYER)); return o; };
+
+
+/* ---------------------------------------------------------------- solids
+   The builders asked for a lot of half-transparent fills so you could watch
+   particles inside the buildings. That was the single biggest reason the city
+   read as a washed-out wireframe rather than a place, and it is no longer
+   buying anything: particles are on the glow layer now, so they shine THROUGH
+   geometry whether it is see-through or not.
+
+   So anything a builder asked for in the "solid but faint" band is promoted to
+   nearly opaque. Everything at or below SHELL is left exactly as declared,
+   because those are the district volumes and boundary shells — they are meant
+   to be glass, and they are what tells you where one stage ends. Turn ALPHA_MIN
+   down to 0 to get the old look back in one edit. */
+const SHELL = 0.30;
+const ALPHA_MIN = 0.70;
+const solidify = o => (o < 1 && o > SHELL) ? Math.min(1, ALPHA_MIN + o*0.30) : o;
+
+/* Below this a mesh is glass and must not drop a hard shadow: three has no
+   notion of a partly transparent shadow, so a 10%-opacity district shell would
+   otherwise paint a solid black slab across the ground. */
+const SHADOW_MIN = 0.80;
+
 function box(w,h,d,color,opacity=1,flat=false){
   const g = new THREE.BoxGeometry(w,h,d);
-  const m = new THREE.MeshLambertMaterial({
-    color, transparent:opacity<1, opacity,
-    depthWrite:opacity>0.6, flatShading:flat
+  let op = solidify(opacity);
+  /* once it is this close to solid, make it actually solid: it drops out of the
+     transparent sort, which is both cheaper and more correct */
+  if(op >= 0.96) op = 1;
+  const m = new THREE.MeshStandardMaterial({
+    color, transparent:op<1, opacity:op,
+    depthWrite:op>0.6, flatShading:flat,
+    roughness:0.52, metalness:0.04, envMapIntensity:0.9
   });
-  return new THREE.Mesh(g,m);
+  const mesh = new THREE.Mesh(g,m);
+  mesh.castShadow = op >= SHADOW_MIN;
+  mesh.receiveShadow = true;
+  return mesh;
 }
 function edged(w,h,d,color,opacity,edgeColor){
   const grp = new THREE.Group();
@@ -62,7 +105,35 @@ function chevron(x,z,size,color,opacity,rotY=0){
   return m;
 }
 
-/* --- canvas text → flat ground plane --- */
+/* --- canvas text → flat ground plane ---
+ *
+ * Every ground label in the city is baked into a canvas at module-init, and
+ * `ctx.font = '... Poppins ...'` does NOT ask the browser to load a webfont —
+ * only rendered DOM text does. So this used to be a race: whichever labels were
+ * baked before Poppins arrived were baked in the fallback face, and stayed that
+ * way for the session. On a cold load that is most of them.
+ *
+ * Fix it at the source instead of guessing: ask for the two faces explicitly,
+ * and re-bake every label once they land. Metrics change when the face does, so
+ * the plane's geometry is rebuilt too, not just the texture.
+ */
+const FACES = ['700 190px Poppins', '190px "Share Tech Mono"'];
+let fontsReady = false;
+const pendingText = new Set();
+function whenFontsReady(fn){
+  if(fontsReady){ fn(); return; }
+  pendingText.add(fn);
+}
+if(typeof document !== 'undefined' && document.fonts){
+  Promise.all(FACES.map(f => document.fonts.load(f).catch(()=>null)))
+    .then(()=> document.fonts.ready).catch(()=>null)
+    .then(()=>{
+      fontsReady = true;
+      for(const fn of pendingText) { try{ fn(); }catch(err){} }
+      pendingText.clear();
+    });
+}
+
 function textTexture(txt, {size=190, weight=700, color='#8A8C8E', mono=false, track=0}={}){
   const cv = document.createElement('canvas');
   const ctx = cv.getContext('2d');
@@ -91,11 +162,22 @@ function groundText(txt, x, z, height, opts={}){
   m.rotation.x = -Math.PI/2;
   m.rotation.z = opts.rotZ ?? 0;
   m.position.set(x, opts.y ?? 0.05, z);
+  whenFontsReady(()=>{
+    const re = textTexture(txt, opts);
+    m.material.map?.dispose();
+    m.material.map = re.tex;
+    m.material.needsUpdate = true;
+    m.geometry.dispose();
+    m.geometry = new THREE.PlaneGeometry(height*re.aspect, height);
+  });
   return m;
 }
 
 export {
   edgeMat,
+  BLOOM_LAYER,
+  glow,
+  SHELL,
   box,
   edged,
   put,
