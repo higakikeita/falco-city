@@ -10,7 +10,8 @@ import { step, spawn, spawnPolicy, N, PN } from './sim.js';
 import { flushLog } from './log.js';
 import { updateTags, updateHud, drawMinimap, select, closeDrawer } from './ui.js';
 import { setMode, setDeploy, onTuneChange } from './controls.js';
-import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack } from './campaign.js';
+import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack,
+         setRole, setSide, blameOf, OWNER, roleReport } from './campaign.js';
 import { model } from './state.js';
 
 
@@ -54,6 +55,7 @@ window.__city = {
   frames:0,
   pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); tickReveal(dt); flushLog(dt); updateHud(dt); } },
   GAME, evaluate, build, setUiMode, runAttack,
+  setRole, setSide, blameOf, OWNER, roleReport,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
