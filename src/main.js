@@ -6,14 +6,16 @@ import { renderer, scene, camera, controls, homeView, homeCam, onResize,
          tickFlight, goHome, HOME_TGT } from './scene.js';
 import { districtObjs, hitTargets } from './city.js';
 import { RULE_BLOCKS, deployRefs } from './districts.build.js';
-import { step, spawn, spawnPolicy, N, PN } from './sim.js';
+import { step, spawn, spawnPolicy, N, PN, P } from './sim.js';
 import { flushLog } from './log.js';
 import { updateTags, updateHud, drawMinimap, select, closeDrawer } from './ui.js';
 import { setMode, setDeploy, onTuneChange } from './controls.js';
 import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack,
          setRole, setSide, blameOf, OWNER, roleReport,
          SCENARIOS, startScenario, activeScenario, activeEnv, activeChain,
-         goalStatus } from './campaign.js';
+         goalStatus, onCampaignChange } from './campaign.js';
+import { initAudio, play, tickAudio, campaignAudio,
+         setMuted, toggleMuted, setVolume, audioState } from './audio.js';
 import { SCENARIO_ERRORS } from './scenarios/index.js';
 import { model } from './state.js';
 
@@ -31,6 +33,7 @@ function frame(){
   controls.update();
 
   step(dt);
+  tickAudio(P);
   tickReveal(dt);
   flushLog(dt);
   updateTags();
@@ -62,6 +65,7 @@ window.__city = {
   SCENARIOS, startScenario, activeScenario, activeEnv, activeChain, goalStatus,
   SCENARIO_ERRORS,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
+  initAudio, play, setMuted, toggleMuted, setVolume, audioState,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
   camDist(){ return camera.position.distanceTo(controls.target); },
@@ -69,6 +73,11 @@ window.__city = {
                camera.position.set(...h.pos); controls.target.copy(h.tgt);
                controls.update(); updateTags(); renderer.render(scene,camera); }
 };
+
+/* the sound layer listens to the same feed the campaign panel does, so it never
+   needs its own hook into the rules. Muted by default — nothing is created
+   until a real click reaches initAudio(). */
+onCampaignChange(ev => campaignAudio(ev, GAME));
 
 /* init */
 setMode('oss');
