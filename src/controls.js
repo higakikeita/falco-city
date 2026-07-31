@@ -234,7 +234,7 @@ function syncEnvSegs(){
   document.querySelectorAll('#deploySeg button').forEach(b=>{
     const sel = ENV_SEL[b.dataset.axis] === b.dataset.val;
     b.classList.toggle('on', sel);
-    b.dataset.dep = sel ? env.wire : ' ';
+    b.dataset.dep = sel ? env.wire : '';
   });
   /* k8s-metacollector watches the API server, so without one the k8smeta axis
      keeps its selection and loses its effect. Say so rather than hiding it. */

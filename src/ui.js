@@ -12,8 +12,10 @@ import {
   canBuild, canUseLever, roleReport, verdictText, score,
   build, requestBuild, runAttack, setRole, setSide, setUiMode, onCampaignChange,
   SCENARIOS, activeScenario, activeEnv, activeChain, startScenario, goalStatus,
-  allowedDeploys, allowedDrivers
+  allowedDeploys, allowedDrivers,
+  projection, passResults, activeWaves
 } from './campaign.js';
+import { resetLog } from './log.js';
 import { initMenu, plotTag, plotStyle } from './menu.js';
 import { initAudio, setMuted, audioState } from './audio.js';
 /* progress is read here and written in main.js: save.js decides the shape, this
@@ -191,13 +193,40 @@ const GOAL_LBL = {
   detect: (i) => `検知 ${i.actual}/${i.of} — ${i.target} 段以上`,
   contain:(i) => `封じ込め — ${i.actual ? '成立' : '未成立'}`,
   asks:   (i) => `他チームへの依頼 ${i.actual}件 — ${i.target}件まで`,
-  drop:   (i) => `ドロップ ${i.actual}% — ${i.target}% まで`
+  drop:   (i) => `ドロップ ${i.actual}% — ${i.target}% まで`,
+  /* the wave layer's four. `runs` is passes started, so the ceiling is on brute
+     force; `buried` is the share of alerts the SOC queue lost; `pass` is how much
+     of the traffic reaches the rule engine at all; `load` exists so a scenario
+     can say "solve it at the load you were handed" instead of letting the
+     slider make the symptom go away. */
+  runs:   (i) => `試行 ${i.actual}回目 — ${i.target}回まで`,
+  buried: (i) => `アラートの埋没 ${i.actual}% — ${i.target}% まで`,
+  pass:   (i) => `ルールに届く割合 ${i.actual}% — ${i.target}% 以上`,
+  load:   (i) => `NODE LOAD ×${i.actual} — 渡された ×${i.target} を下げずに`
+};
+
+/* the goal as an INSTRUCTION rather than as a score, for the pre-run preview:
+   before a pass there is no `actual` worth showing, and "依頼は3件まで" is the
+   part the player needed before spending the fourth one. */
+const GOAL_ASK = {
+  detect: (i) => `${i.target} 段以上を検知する`,
+  contain:( ) => '封じ込めを成立させる',
+  asks:   (i) => `他チームへの依頼は ${i.target}件まで`,
+  drop:   (i) => `ドロップは ${i.target}% まで`,
+  runs:   (i) => `試行は ${i.target}回まで`,
+  buried: (i) => `アラートの埋没は ${i.target}% まで`,
+  pass:   (i) => `ルールに届く割合を ${i.target}% 以上に保つ`,
+  load:   (i) => `NODE LOAD ×${i.target} を下げない`
 };
 
 /* lever group -> the panel it lives in. campaign.js names the group; only this
-   file knows which node that is. */
+   file knows which node that is. `load` is here because a scenario hands you a
+   load as part of the situation: with the slider free, two of the drop scenarios
+   were solved by dragging it left, which is not a diagnosis. campaign.js decides
+   whether it is locked (loadLocked / canUseLever); this only knows the node. */
 const LEVER_NODE = {
-  deploy:'#deploySeg', driver:'#drvSeg', tuning:'.panel.tune', stack:'#modeSeg'
+  deploy:'#deploySeg', driver:'#drvSeg', tuning:'.panel.tune', stack:'#modeSeg',
+  load:'#loadWrap'
 };
 
 /* The hint carries scenario prose now, and prose has no length limit while the
@@ -247,7 +276,129 @@ function fitCampaignPanel(){
   if(elMini) elMini.style.visibility = tight ? 'hidden' : '';
   elCmp.style.maxHeight = Math.round(tight ? innerHeight - top - 20 : room) + 'px';
 }
-addEventListener('resize', fitCampaignPanel);
+
+/* ============================================================
+   §fitRightColumn — the levers, the symptoms and the evidence
+   ------------------------------------------------------------
+   THE BUG THIS EXISTS FOR. The right edge carries two stacks anchored to
+   opposite corners: #topRight (HUD, node load, TUNING, legend) from the top, and
+   #consoleWrap from the bottom. Nothing measured either, so at 1280x720 the
+   console's 215px box landed on top of the bottom half of TUNING and — because
+   an overlay in .ui.interactive takes pointer events — ate every click aimed at
+   it. `buf_size_preset`, `cpus_for_each_buffer`, `syscall_event_drops.actions`,
+   `reset` and the `slow output` checkbox were all unreachable. `slow-output`'s
+   only correct move is that checkbox, so the scenario was unsolvable in the
+   default state at the resolution we call the supported minimum, while two
+   WRONG levers still scored it as cleared. That is not a difficulty problem.
+
+   `#consoleBox` is now transparent to the mouse (index.html), which alone makes
+   the levers clickable and also gives the tour bar its buried buttons back. But
+   a lever you cannot SEE is still a lever you cannot use, so the two stacks are
+   also measured against each other here, and the shortfall is spent in a stated
+   order:
+
+     1. the legend goes.      A colour key. It teaches nothing you act on, and at
+                              720p it was already below the fold — this only
+                              makes that a decision instead of an accident.
+     2. the console shrinks.  Down to CLOG_FLOOR and no further.
+     3. the console goes.     Bar only. The toggle is still there, and opening it
+                              now overlays without stealing a single click.
+
+   HUD and TUNING are never touched. Same principle as fitCampaignPanel: when
+   two things cannot both fit, the one that is the game wins.
+   ============================================================ */
+const elRight   = document.getElementById('topRight');
+const elLegend  = document.getElementById('legendPanel');
+const elConWrap = document.getElementById('consoleWrap');
+const elConBox  = document.getElementById('consoleBox');
+const elCbar    = document.querySelector('#consoleBox .cbar');
+const elClog    = document.getElementById('clog');
+const elCtog    = document.getElementById('ctoggle');
+
+/* The log is a ticker — #clog is justify-content:flex-end, so what survives a
+   shrink is the newest lines, which is the part anyone reads. Three of them plus
+   its padding is thin but it is still evidence; below that it is a decoration,
+   and a decoration is not worth covering a lever for. At 1280x720 this is what
+   the right edge can actually spare, and it grows back toward CLOG_FULL as soon
+   as the window is taller. */
+const CLOG_FLOOR = 48;
+const CLOG_FULL  = 186;
+
+/* the fixed offsets the two stacks are pinned with, from index.html */
+const EDGE = 20;      // #topRight top / #consoleWrap bottom
+const COLGAP = 10;    // gap between panels inside #topRight
+const WRAPGAP = 8;    // #consoleWrap's own gap, box -> toggle
+const CLEAR = 8;      // breathing room between the column and the console
+
+/* docked, the console floats over the city instead of under the column, so the
+   only thing bounding it is taste. Seven lines. */
+const CLOG_DOCKED = 132;
+
+function fitRightColumn(){
+  if(!elRight || !elClog || !elConBox) return;
+
+  /* Measure the roomiest state, so what comes out is a property of the layout
+     rather than of the last decision this function made. */
+  if(elLegend) elLegend.hidden = false;
+  elConBox.classList.add('open');
+  elConWrap.classList.remove('docked');
+  document.body.classList.remove('condocked');
+  elClog.style.setProperty('--clogh', CLOG_FULL + 'px');
+
+  const columnH = () => {
+    let h = 0;
+    for(const p of elRight.children){
+      if(p.hidden) continue;
+      h += p.getBoundingClientRect().height + COLGAP;
+    }
+    return h ? h - COLGAP : 0;
+  };
+  const barH = elCbar ? Math.round(elCbar.getBoundingClientRect().height) : 29;
+  const togH = elCtog ? Math.round(elCtog.getBoundingClientRect().height) : 34;
+
+  /* what is left for the console BOX once the column, both edges, the toggle
+     and the gaps have taken theirs */
+  const boxRoom = () =>
+    innerHeight - EDGE*2 - CLEAR - WRAPGAP - togH - columnH();
+
+  /* 1. everything fits, legend included */
+  if(boxRoom() >= barH + CLOG_FULL) return;
+
+  /* 2. the legend is the first thing spent */
+  if(elLegend){
+    elLegend.hidden = true;
+    if(boxRoom() >= barH + CLOG_FULL) return;
+  }
+
+  /* 3. shrink the log to what is left, down to the floor */
+  const h = Math.floor(boxRoom() - barH);
+  if(h >= CLOG_FLOOR){ elClog.style.setProperty('--clogh', h + 'px'); return; }
+
+  /* 4. the right edge cannot hold a legible log at all — which is the case at
+        1280x720, by ~95px. Move it to the bottom strip rather than choosing
+        between the evidence and the levers: see the .docked note in index.html. */
+  elConWrap.classList.add('docked');
+  document.body.classList.add('condocked');
+  elClog.style.setProperty('--clogh', CLOG_DOCKED + 'px');
+}
+addEventListener('resize', fitRightColumn);
+
+/* The column's height is not constant: the verdict is one or two lines depending
+   on the failure mode, and controls.js rebuilds the DEPLOY / DRIVER rows when the
+   environment changes. So re-fit when it actually moved, and not on a timer —
+   fitRightColumn() resets to the roomiest state to measure, and running that
+   every frame would flash the legend. Neither of the two things it changes is in
+   the signature, so this cannot oscillate. */
+let fitSig = '';
+function maybeFitRight(){
+  const tune = document.querySelector('.panel.tune');
+  const sig = [innerHeight,
+               elVerdict ? Math.round(elVerdict.getBoundingClientRect().height) : 0,
+               tune ? Math.round(tune.getBoundingClientRect().height) : 0].join('/');
+  if(sig === fitSig) return;
+  fitSig = sig;
+  fitRightColumn();
+}
 
 function setHint(html, good){
   elHint.className = 'cmp-hint' + (good ? ' good' : '');
@@ -277,15 +428,20 @@ function setEyebrow(){
                           .filter(Boolean).join(' · ');
 }
 
-/* ---- a lever you do not own is visible but untouchable ---- */
+/* ---- a lever you do not own is visible but untouchable ----
+   Two different reasons a lever can be shut, and the veil has to say which:
+   another ROLE owns it (`sre 担当`), or the SCENARIO owns it — NODE LOAD has no
+   owner in LEVER_OWNER at all, because the load is the situation you were handed
+   rather than anybody's decision, and goal.lockLoad says so. */
 function applyRoleLocks(){
   for(const [group, sel] of Object.entries(LEVER_NODE)){
     const el = document.querySelector(sel);
     if(!el) continue;
     const lock = !canUseLever(group);
     el.classList.toggle('dutylock', lock);
-    if(lock) el.dataset.owner = `${roleById(LEVER_OWNER[group]).short} 担当`;
-    else delete el.dataset.owner;
+    if(!lock){ delete el.dataset.owner; continue; }
+    const owner = roleById(LEVER_OWNER[group]);
+    el.dataset.owner = owner ? `${owner.chip} 担当` : 'シナリオ固定';
   }
 }
 
@@ -447,7 +603,7 @@ function renderBuildList(){
     if(owner){
       const badge = document.createElement('span');
       badge.className = 'own';
-      badge.textContent = owner.short;
+      badge.textContent = owner.chip;
       badge.style.borderLeftColor = owner.color;
       row.appendChild(badge);
     }
@@ -459,7 +615,7 @@ function renderBuildList(){
         b.textContent = '建設';
         b.onclick = ()=> build(id);
       } else {
-        b.textContent = `${owner.short} に依頼`;
+        b.textContent = `${owner.chip} に依頼`;
         b.className = 'askbtn';
         b.onclick = ()=> requestBuild(id);
       }
@@ -521,6 +677,7 @@ function captureBest(){
     renderScenarioPicker();
     setEyebrow();
     renderResults();
+    renderDebrief();
   }, 0);
 }
 
@@ -546,7 +703,7 @@ function renderScenarioReport(){
 
   const wrap = document.createElement('div');
   wrap.className = 'rrep';
-  wrap.innerHTML = `<h5>${st.cleared ? 'cleared' : 'not cleared'}</h5>`;
+  wrap.innerHTML = `<h5>${st.cleared ? 'クリア' : '未クリア'}</h5>`;
   st.items.forEach(i=>{
     const row = document.createElement('div');
     row.className = 'rrow ' + (i.ok ? 'clean' : 'blamed');
@@ -592,13 +749,21 @@ function renderRoleReport(){
   const rep = roleReport();
   const wrap = document.createElement('div');
   wrap.className = 'rrep';
-  wrap.innerHTML = '<h5>role scorecard</h5>';
+  wrap.innerHTML = '<h5>役割別</h5>';
   rep.roles.forEach(r=>{
     const row = document.createElement('div');
     row.className = 'rrow ' + (r.misses ? 'blamed' : r.built === r.owns ? 'clean' : '');
     row.style.borderLeftColor = r.color;
+    /* 全役 means every one of these is you. roleReport() derives `mine` from
+       GAME.role, which is null there, so nothing was marked and the tutorial
+       read its own misses as somebody else's. */
+    const mine = r.mine || !GAME.role;
+    /* the chip is how this role is named everywhere else in the panel — the
+       badge on a build row, the 依頼 button, the lever veil. Showing it beside
+       the full name here is what stops the player needing a lookup table. */
+    const chip = (roleById(r.id) || {}).chip || '';
     row.innerHTML =
-      `<span class="rn">${r.jp}${r.mine ? '（あなた）' : ''}</span>`+
+      `<span class="rn">${chip ? chip + ' · ' : ''}${r.jp}${mine ? '（あなた）' : ''}</span>`+
       `<span class="rv">${r.built}/${r.owns} 建設${r.misses ? ` · 見逃し ${r.misses}` : ''}</span>`;
     wrap.appendChild(row);
   });
@@ -616,11 +781,28 @@ function renderResults(){
   elScore.textContent = score();
   sizeResults();
   if(!GAME.results){ keepActionableVisible(); return; }
+
+  /* WHICH WAVE, AND WHICH STEP OF THE WHOLE ATTACK.
+     GAME.results holds the wave on screen, not the pass, so numbering rows from
+     its own index restarted at "step 1" when wave 2 arrived — while the score
+     above it kept counting the pass. passResults() is the pass, so the offset is
+     everything it already holds minus what is being revealed right now. */
+  const waves = activeWaves();
+  const shown = Math.min(GAME.reveal, GAME.results.length);
+  const step0 = Math.max(0, passResults().length - shown);
+  if(waves.length > 1 && GAME.wave >= 0){
+    const h = document.createElement('div');
+    h.className = 'cmp-wave';
+    h.textContent = `波 ${GAME.wave+1} / ${waves.length}`
+                  + (waves[GAME.wave] && waves[GAME.wave].jp ? ` · ${waves[GAME.wave].jp}` : '');
+    elRes.appendChild(h);
+  }
+
   GAME.results.slice(0, GAME.reveal).forEach((r,i)=>{
     const el = document.createElement('div');
     el.className = 'cmp-res ' + (r.caught ? 'hit' : 'miss');
     el.innerHTML =
-      `<span class="st">${r.response ? '対処' : 'step '+(i+1)} · ${r.caught ? '検知' : '見逃し'}</span>`+
+      `<span class="st">${r.response ? '対処' : (step0+i+1)+'段目'} · ${r.caught ? '検知' : '見逃し'}</span>`+
       `<span class="ac">${r.jp}</span>`+
       `<span class="rl">${r.rule}</span>`+
       (r.why ? `<span class="wy">${r.why}</span>` : '');
@@ -648,11 +830,163 @@ function renderResults(){
   keepActionableVisible();
 }
 
+/* ============================================================
+   §goal — what you are being asked for, BEFORE you are scored on it
+   ------------------------------------------------------------
+   goalStatus() is null until the pass is over, and renderScenarioReport() only
+   draws into the results, so on entry the panel showed the title, the blurb, the
+   build list and a run button — and nothing about what winning is. `依頼は3件
+   まで` in particular is unrecoverable once spent (GAME.asks never goes down),
+   and players were spending the fourth without ever having been told there was a
+   third. campaign.js §projection() answers this without running anything:
+   evaluate() is pure, so the same scoreGoal() that grades the pass can grade the
+   board as it stands.
+   The strip is always on screen, not just on entry, because setHint() gets
+   overwritten by every build unlock — a goal you are shown once and then lose is
+   the same bug in slow motion.
+   ============================================================ */
+const elGoal = document.getElementById('cmpGoal');
+
+function renderGoal(){
+  if(!elGoal) return;
+  const sc = activeScenario();
+  if(!sc || !GAME.on){ elGoal.hidden = true; return; }
+  /* the pass is scored: the results and the debrief own the verdict, and this
+     strip goes back to stating the ask so a re-run knows what it is chasing */
+  const st = goalStatus() || projection();
+  if(!st || !st.items.length){ elGoal.hidden = true; return; }
+  elGoal.hidden = false;
+  const live = !!goalStatus();
+  elGoal.innerHTML = `<span class="gl">${live ? '結果' : '目標'}</span>`
+    + st.items.map(i=>{
+        const txt = live
+          ? (GOAL_LBL[i.key] ? GOAL_LBL[i.key](i) : i.key)
+          : (GOAL_ASK[i.key] ? GOAL_ASK[i.key](i) : i.key);
+        /* before a run, `ok` is a projection: it says "as things stand", which is
+           a hint and not a score, so it is marked differently from a result */
+        return `<span class="gi ${i.ok ? 'met' : 'unmet'}">${txt}</span>`;
+      }).join('');
+  elGoal.title = (live ? '達成状況' : 'いまの盤面での見込み')
+    + '\n' + st.items.map(i => (i.ok ? '○ ' : '× ')
+      + (GOAL_ASK[i.key] ? GOAL_ASK[i.key](i) : i.key)).join('\n');
+}
+
+/* ============================================================
+   §debrief — the answer check, in a box big enough to read it
+   ------------------------------------------------------------
+   See the markup note in index.html for why this is not in the panel. The rule
+   about WHEN each thing appears:
+     always      cleared / not cleared, and every goal row with its numbers
+     on a clear  the misdiagnosis (insight.wrong / insight.truth) and the grade
+   The insight is the answer to the question the scenario asked, so it is a
+   reward for having answered it — not something the game says on the way in,
+   which is what the HUD verdict used to do.
+   ============================================================ */
+const elDebrief = document.getElementById('debrief');
+const elDbCard  = document.getElementById('dbCard');
+const elDbTitle = document.getElementById('dbTitle');
+const elDbStamp = document.getElementById('dbStamp');
+const elDbEyeb  = document.getElementById('dbEyebrow');
+const elDbBody  = document.getElementById('dbBody');
+const elDbNext  = document.getElementById('dbNext');
+const elDbNote  = document.getElementById('dbNote');
+
+function hideDebrief(){ if(elDebrief) elDebrief.classList.remove('show'); }
+
+function renderDebrief(){
+  if(!elDebrief || !elDebrief.classList.contains('show')) return;
+  const sc = activeScenario(), st = goalStatus();
+  if(!sc || !st){ hideDebrief(); return; }
+
+  elDbEyeb.textContent = `debrief · 試行 ${GAME.runs}回目`;
+  elDbTitle.textContent = sc.title;
+  elDbStamp.className = 'dbstamp ' + (st.cleared ? 'win' : 'lose');
+  elDbStamp.textContent = st.cleared ? 'クリア' : '未クリア';
+
+  const html = [];
+  html.push('<div class="dbsec">この回の採点</div>');
+  for(const i of st.items){
+    const txt = GOAL_LBL[i.key] ? GOAL_LBL[i.key](i) : i.key;
+    html.push(`<div class="rrow ${i.ok ? 'clean' : 'blamed'}"`
+      + ` style="border-left-color:${i.ok ? 'var(--lumin)' : 'var(--red-ui)'}">`
+      + `<span class="rn">${i.ok ? '達成' : '未達'}</span>`
+      + `<span class="rv">${txt}</span></div>`);
+  }
+
+  /* what got past you, so the not-cleared case has something to act on */
+  const missed = passResults().filter(r => !r.caught);
+  if(missed.length){
+    html.push('<div class="dbsec">抜けた段</div>');
+    for(const r of missed){
+      const b = roleById(r.blame);
+      html.push(`<div class="dbline"><b>${r.jp}</b>`
+        + (r.why ? ` — ${r.why}` : '')
+        + (b ? `<br><span style="color:var(--grey-30)">起因 · ${b.jp}</span>` : '')
+        + '</div>');
+    }
+  }
+
+  /* THE PAYLOAD — only once it has been earned */
+  if(st.cleared && sc.insight){
+    html.push('<div class="dbsec">この現場が誘う誤診</div>');
+    html.push('<div class="dbins">'
+      + `<span class="q"><span class="lbl">踏みがちな読み</span>${sc.insight.wrong}</span>`
+      + `<span class="lbl">実際は</span>${sc.insight.truth}</div>`);
+  }
+
+  if(bestNote && bestNote.id === sc.id){
+    const b = bestNote.best;
+    const head = bestNote.first ? '初クリア'
+               : bestNote.improved ? '自己ベスト更新' : '自己ベスト';
+    html.push('<div class="dbsec">記録</div>');
+    html.push(`<div class="rrow ${bestNote.improved ? 'clean' : ''}"`
+      + ` style="border-left-color:${bestNote.improved ? 'var(--lumin)' : 'var(--grey-20)'}">`
+      + `<span class="rn">${head}</span>`
+      + `<span class="rv">検知 ${b.detect}/${b.of} · 依頼 ${b.asks}件 · ${b.attempts}回目`
+      + `${b.clears > 1 ? ` · ${b.clears}回クリア` : ''}</span></div>`);
+  }
+  elDbBody.innerHTML = html.join('');
+
+  /* one click onward — the campaign had no "next" at all before this */
+  const p = progressSummary(scenarioOrder());
+  const nx = st.cleared && p.next ? SCENARIOS.find(s => s.id === p.next) : null;
+  elDbNext.hidden = !nx;
+  if(nx){
+    elDbNext.textContent = `次へ — ${nx.title} →`;
+    elDbNext.onclick = ()=>{ hideDebrief(); startScenario(nx.id); };
+  }
+  elDbNote.innerHTML = st.cleared
+    ? `${p.total} 本中 ${p.cleared} 本クリア`
+      + (p.complete ? '<br>全シナリオ制覇' : '')
+      + (storageOk() ? '' : '<br>この環境では保存されません')
+    : 'もう一度流すと試行が1回増えます';
+  elDbCard.scrollTop = 0;
+}
+
+function showDebrief(){
+  if(!elDebrief || !goalStatus()) return;
+  elDebrief.classList.add('show');
+  renderDebrief();
+}
+
+if(elDebrief){
+  document.getElementById('dbClose').onclick = hideDebrief;
+  /* the backdrop closes it; the card does not */
+  elDebrief.addEventListener('click', ev => { if(ev.target === elDebrief) hideDebrief(); });
+  addEventListener('keydown', ev => {
+    if(ev.key === 'Escape' && elDebrief.classList.contains('show')){
+      ev.stopPropagation();
+      hideDebrief();
+    }
+  }, true);
+}
+
 /* ---- the change feed ---- */
 function renderCampaignAll(){
   renderScenarioPicker();
   renderSides();
   renderRoles();
+  renderGoal();
   renderBuildList();
   applyRoleLocks();
   syncLeverWidgets();
@@ -683,6 +1017,10 @@ onCampaignChange(ev=>{
   switch(ev.type){
     case 'mode':
       bestNote = null;
+      hideDebrief();
+      /* the console is evidence about the situation you are in — carrying the
+         last one's lines across makes the new premise false on arrival */
+      resetLog();
       elCmp.classList.toggle('on', GAME.on);
       [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
         b.classList.toggle('on', b.dataset.ui === ev.mode));
@@ -691,12 +1029,14 @@ onCampaignChange(ev=>{
       if(GAME.on) showScenario();
       /* leaving campaign gives every lever back — the role only binds in play */
       else { elTitle.textContent = DEFAULT_MISSION;
-             applyRoleLocks(); syncLeverWidgets(); fitCampaignPanel(); }
+             renderGoal(); applyRoleLocks(); syncLeverWidgets(); fitCampaignPanel(); }
       closeDrawer();
       goHome();
       break;
     case 'scenario':
       bestNote = null;
+      hideDebrief();
+      resetLog();
       resetHudBaseline();
       showScenario();
       closeDrawer();
@@ -708,7 +1048,7 @@ onCampaignChange(ev=>{
       setEyebrow();
       setHint(r ? `<b>${r.jp}</b>として参加する。${r.brief}`
                 : (sc ? sc.blurb : ''), false);
-      renderSides(); renderRoles(); renderBuildList(); applyRoleLocks();
+      renderSides(); renderRoles(); renderGoal(); renderBuildList(); applyRoleLocks();
       break;
     }
     case 'side':
@@ -718,21 +1058,39 @@ onCampaignChange(ev=>{
       break;
     case 'build':
       setHint(ev.unlock, true);
+      renderGoal();
       renderBuildList();
       renderResults();
       flyTo(byId(ev.id).cam, districtObjs[ev.id].center);
       break;
+    /* every one of these moves the projection, so the goal strip is re-read */
     case 'asks':
       renderRoles();
+      renderGoal();
+      break;
+    case 'requirement':
+      renderGoal();
+      renderBuildList();
       break;
     case 'run':
       /* a new attempt: last run's verdict on the best is no longer this run's */
       bestNote = null;
       renderResults();
+      renderGoal();
       break;
     case 'reveal':
       if(ev.done) captureBest();
       renderResults();
+      break;
+    case 'waveEnd':
+      renderGoal();
+      break;
+    /* the pass is scored. THIS is where the debrief belongs: goalStatus() is
+       non-null only in the `over` phase, and it is the one moment the player has
+       earned the answer to the question the scenario asked. */
+    case 'over':
+      renderGoal();
+      showDebrief();
       break;
   }
 });
@@ -852,7 +1210,9 @@ function updateHud(dt){
   const ruleRate = (S.counters.rules- lastC.rules)* k * SCALE;
   lastC = {...S.counters}; hudT = 0;
 
-  const sm = (a,b)=> a + (b-a)*0.35;
+  /* clamped at zero: the smoothing overshoots on the way down, and a rate of
+     -0.2 rendered as `0  (-0.00%)` reads as a broken instrument */
+  const sm = (a,b)=> Math.max(0, a + (b-a)*0.35);
   S.shown.sys  = sm(S.shown.sys, sysRate);
   S.shown.ring = sm(S.shown.ring, ringRate);
   S.shown.drop = sm(S.shown.drop, dropRate);
@@ -864,41 +1224,112 @@ function updateHud(dt){
   const win = Math.min(60000, Math.max(5000, now - T0));
   const apm = S.alertWindow.length * (60000/win);
 
+  const M = model();
   els.sys.textContent   = fmt(S.shown.sys);
   els.ring.textContent  = fmt(S.shown.ring);
-  const dropPct = S.shown.ring>0 ? (S.shown.drop/(S.shown.ring+S.shown.drop))*100 : 0;
+  /* THE RATE COMES FROM THE MODEL, NOT FROM THE PARTICLE COUNTERS (GAP 6.3).
+     Two bugs in one line, and both put a number on screen that disagreed with
+     the number the same screen was scoring the player against:
+       - the denominator was counted twice. sim.js increments `ring` when an
+         event passes the kernel gate and THEN increments `drop` for the same
+         event, so a dropped event is already inside `ring`; `drop/(ring+drop)`
+         divides by the drops a second time.
+       - it was a ratio of two EMA-smoothed rates, so the same configuration
+         rendered anywhere from 14.00% to 16.30% while the scoring row sat still
+         at 16.59%.
+     model().dropP is the figure campaign.js scores `goal.maxDropPct` on, so
+     taking it here is what makes the instrument and the scoreboard the same
+     claim. The absolute events/s keeps coming from the counters — that is a
+     volume, and it is honestly a smoothed one. */
+  const dropPct = M.dropP * 100;
   els.drop.textContent  = fmt(S.shown.drop) + '  (' + dropPct.toFixed(2) + '%)';
   els.rules.textContent = fmt(S.shown.rules);
   els.alert.textContent = Math.round(apm);
   els.drop.className = dropPct > 0.2 ? 'red' : 'dark';
-  updateVerdict(model());
+  updateVerdict(M);
+  maybeFitRight();
 }
 
 /* The teaching payload: name WHICH failure mode you are looking at,
    because the two have different fixes. */
 const elUtil = document.getElementById('mUtil');
 const elVerdict = document.getElementById('mVerdict');
+
+/* THE BAND MUST NOT ANSWER THE SCENARIO.
+ * -----------------------------------------------------------------------------
+ * Two scenarios (`inherited-all-syscalls`, `slow-output`) exist to be
+ * MISDIAGNOSED: you see drops, you reach for buf_size_preset, it does nothing,
+ * and that is how you learn the difference between a burst and a sustained
+ * overload. This band used to print the whole remedy — "バッファを増やしても
+ * 直りません — base_syscalls を custom_set に絞る、…" — from the first frame
+ * after entry, which denied the misdiagnosis before it could be made and left
+ * those two scenarios with nothing left to diagnose.
+ *
+ * So each row below is split into the two things it was conflating, and they no
+ * longer appear at the same time:
+ *
+ *   sym   the SYMPTOM. Which of the two failure modes this is, and the numbers
+ *         it is measured by. Always shown — telling the two modes apart IS the
+ *         skill, and a symptom is what an instrument is for.
+ *   fix   WHICH LEVER MOVES IT. Explore only. Explore is the explanation of the
+ *         model, there is no scenario there to spoil, and this is the one place
+ *         the remedy is supposed to be readable straight off the panel.
+ *
+ * The third statement of the same subject — `insight.wrong` / `insight.truth`,
+ * the misdiagnosis this particular situation invites — belongs to the scenario
+ * file and is rendered by renderScenarioReport() only once the pass has been
+ * scored. One fact, one owner, one moment each: the instrument reports, Explore
+ * explains, the scenario debriefs. Before this, the band and the scenario were
+ * both making the same claim, and the band was making it first. */
+const VERDICT = {
+  dead: {
+    /* recovery is not a scenario's answer — no scenario's misdiagnosis is "the
+       agent exited" — and a player with a dead agent and no way back is stuck,
+       so this one sentence stays in both modes */
+    sym: () => 'falco が <b>exit</b> しました。検知はゼロです。'
+             + '負荷か設定を変えると再起動します。',
+    fix: () => '' },
+  sustained: {
+    sym: M => `持続的な入力超過 — 入力は消費能力の <b>${Math.round(M.util*100)}%</b>。`
+            + 'ドロップが続いています。',
+    /* The advice itself was wrong twice, and it was on screen every frame:
+       `cpus_for_each_syscall_buffer` is not a key that exists (it is
+       `engine.<engine>.cpus_for_each_buffer`), and "set it to 1" is the
+       direction the Falco docs argue AGAINST — INVARIANTS 1.4. Dropping events
+       is fought by making buffers FEWER and LARGER (4–6 CPUs each, with a
+       bigger preset), which is also the direction state.js §BUF_CAP now
+       models, so the panel and the model finally say the same thing. */
+    fix: () => '<b>バッファを細かく割っても直りません</b> — '
+             + '<code>base_syscalls</code> を <code>custom_set</code> に絞って入力を減らす、'
+             + '<code>engine.&lt;engine&gt;.cpus_for_each_buffer</code> を <b>4</b> に上げて'
+             + '（バッファは少なく大きく）<code>buf_size_preset</code> と組ませる、'
+             + 'slow output を外す。' },
+  burst: {
+    sym: M => 'バースト起因のドロップ。平均は消費能力の内側'
+            + `（<b>${Math.round(M.util*100)}%</b>）で、山だけが溢れています。`,
+    fix: () => '平均は足りているので <code>buf_size_preset</code> を上げれば効きます。' },
+  ok: {
+    sym: () => 'ドロップなし。消費が入力に追いついています。',
+    fix: () => '' }
+};
+
+function verdictKind(M){
+  if(S.dead) return 'dead';
+  if(M.sustained > 0.004) return 'sustained';
+  if(M.burst > 0.0015) return 'burst';
+  return 'ok';
+}
+
 function updateVerdict(M){
   elUtil.textContent = Math.round(M.util*100)+'%';
   elUtil.className = M.util > 1 ? 'red' : 'dark';
-  let cls, txt;
-  if(S.dead){
-    cls = 'dead';
-    txt = 'falco が <b>exit</b> しました。検知はゼロです。負荷か設定を変えると再起動します。';
-  } else if(M.sustained > 0.004){
-    cls = 'sustained';
-    txt = `持続的な入力超過（消費能力の <b>${Math.round(M.util*100)}%</b>）。`
-        + `<b>バッファを増やしても直りません</b> — base_syscalls を custom_set に絞る、`
-        + `cpus_for_each_syscall_buffer を 1 にする、slow output を外す。`;
-  } else if(M.burst > 0.0015){
-    cls = 'burst';
-    txt = 'バースト起因のドロップ。平均は足りているので <b>buf_size_preset を上げれば効きます</b>。';
-  } else {
-    cls = 'ok';
-    txt = 'ドロップなし。消費が入力に追いついています。';
-  }
-  elVerdict.className = 'verdict '+cls;
-  elVerdict.innerHTML = txt;
+  const cls = verdictKind(M);
+  const v = VERDICT[cls];
+  /* GAME.on is the whole gate: in a scenario the band reports, in Explore it
+     also explains. Nothing else about the band changes between the two. */
+  const fix = GAME.on ? '' : v.fix(M);
+  elVerdict.className = 'verdict ' + cls;
+  elVerdict.innerHTML = v.sym(M) + (fix ? ' ' + fix : '');
 }
 function fmt(n){
   if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
