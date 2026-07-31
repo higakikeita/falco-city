@@ -11,7 +11,10 @@ import { flushLog } from './log.js';
 import { updateTags, updateHud, drawMinimap, select, closeDrawer } from './ui.js';
 import { setMode, setDeploy, onTuneChange } from './controls.js';
 import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack,
-         setRole, setSide, blameOf, OWNER, roleReport } from './campaign.js';
+         setRole, setSide, blameOf, OWNER, roleReport,
+         SCENARIOS, startScenario, activeScenario, activeEnv, activeChain,
+         goalStatus } from './campaign.js';
+import { SCENARIO_ERRORS } from './scenarios/index.js';
 import { model } from './state.js';
 
 
@@ -56,6 +59,8 @@ window.__city = {
   pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); tickReveal(dt); flushLog(dt); updateHud(dt); } },
   GAME, evaluate, build, setUiMode, runAttack,
   setRole, setSide, blameOf, OWNER, roleReport,
+  SCENARIOS, startScenario, activeScenario, activeEnv, activeChain, goalStatus,
+  SCENARIO_ERRORS,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
