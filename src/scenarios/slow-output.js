@@ -66,5 +66,16 @@ export default {
 
   /* 6/6 with the output fixed, 5/6 while it is blocked. maxAsks 0 because
      nothing is missing — if you are asking another team, you have misread it. */
-  goal:{ detect:6, contain:false, maxAsks:0, maxDropPct:1 }
+  /* BOARD #10: this cleared two ways that both contradict the scenario, with
+     `slowOutput` still true — by narrowing base_syscalls, and by turning NODE
+     LOAD down. Both work because they shrink the numerator of util, and neither
+     touches the blocked event loop that is the actual fault (INVARIANTS 1.5).
+
+       lockLoad       load is the workload, not a treatment
+       minPassRatio   narrowing is a real answer to a real overload, but not to
+                      this one: 40% keeps `default` (42% reaches the rules) and
+                      refuses `custom_set` (17%). You have to have diagnosed the
+                      output, because brute force is otherwise free. */
+  goal:{ detect:6, contain:false, maxAsks:0, maxDropPct:1,
+         lockLoad:true, minPassRatio:40 }
 };

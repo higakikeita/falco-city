@@ -12,7 +12,7 @@
  * possibly catch stay uncaught.
  */
 import { DISTRICTS, byId, isFlow, setCampaignView } from './layout.js';
-import { S, GAME, model, noise, TUNE_DEFAULTS, hasCap, working, unmetOf } from './state.js';
+import { S, GAME, model, noise, TUNE_DEFAULTS, hasCap, working, unmetOf, profile } from './state.js';
 import { DEPLOYMENTS } from './districts.data.js';
 import { districtObjs } from './city.js';
 import { polPoints } from './sim.js';
@@ -65,6 +65,7 @@ const CHAIN = [
   { id:'shadow', jp:'/etc/shadow を読んで資格情報を探す', rule:'Read sensitive file untrusted',
     needs:SYSCALL_PATH, needsCaps:['kernelPath'], needsSyscalls:OPEN_FAMILY },
   { id:'cron', jp:'/etc/cron.d に書き込んで永続化する', rule:'Write below etc',
+    maturity:'sandbox',
     needs:SYSCALL_PATH, needsCaps:['kernelPath'], needsSyscalls:OPEN_FAMILY },
   /* `Drop and execute new binary in container` is tagged maturity_stable, so it
      ships in the release package and falcoctl has nothing to do with it. It used
@@ -83,7 +84,7 @@ const CHAIN = [
      is where the credentials the cloud step spends actually get taken, which is
      what earns it a place in the chain instead of being an example bolted on. */
   { id:'imds', jp:'IMDS (169.254.169.254) を叩いてインスタンスの資格情報を抜く',
-    rule:'Contact EC2 Instance Metadata Service From Container',
+    rule:'Contact EC2 Instance Metadata Service From Container', maturity:'incubating',
     needs:[...SYSCALL_PATH,'falcoctl'], needsCaps:['kernelPath'],
     /* macro `outbound`: connect, or sendto / sendmsg on an unconnected socket */
     needsSyscalls:['connect','sendto','sendmsg'],
@@ -214,6 +215,44 @@ const openRequirements = id =>
    container and k8s metadata come from the container runtime socket and are
    orthogonal to how Falco was installed (README §環境の因果). Attributing a miss
    to the install form would be restating an error the docs disprove. */
+
+/* ---------------------------------------------------------------- policy breadth
+   Two separate questions, and the data layer answers the second one:
+
+     needs:['falcoctl']     did you build 09 at all?
+     policy.maturity        which artifact sets are you actually following?
+
+   `falcoctl.config.artifact.follow.refs` is literally the second one, so these
+   compose rather than duplicate: 09 can be standing while sandbox is not
+   followed. Default is an empty maturity list, which means "every set
+   installed" — the gate is open until a data file narrows it.
+
+   `priority` is declared per step but LEFT UNSET on every step in this commit.
+   Filling it in is a claim about a real rule's priority and needs a source
+   (INVARIANTS discipline: no claim without one), so the mechanism ships inert
+   and the review lane fills the table from falcosecurity/rules. */
+const MATURITIES = ['stable','incubating','sandbox'];
+const PRIORITY_RANK = ['emergency','alert','critical','error','warning','notice','info','debug'];
+
+const maturityOf = st => st.maturity || 'stable';
+function maturityInstalled(st){
+  const want = profile().policy.maturity;
+  return !want.length || want.includes(maturityOf(st));
+}
+function priorityInScope(st){
+  const floor = profile().policy.minPriority;
+  if(!floor || !st.priority) return true;
+  const a = PRIORITY_RANK.indexOf(st.priority), b = PRIORITY_RANK.indexOf(floor);
+  return a >= 0 && b >= 0 ? a <= b : true;
+}
+const POLICY_WHY = st => !maturityInstalled(st)
+  ? `このルールは <b>${maturityOf(st)}</b> の成熟度で、いまのポリシーが追従している集合`+
+    `（<code>${(profile().policy.maturity.join(' / ') || 'すべて')}</code>）に入っていない。`+
+    `<b>09 を建てていても、追従していない集合のルールはノードに無い</b> — `+
+    `<code>falcoctl.config.artifact.follow.refs</code> が決めるのはここ。`
+  : `このルールの priority がポリシーのしきい値（<code>${profile().policy.minPriority}</code>）より低い。`+
+    `<b>鳴らないのではなく、鳴らさないと決めている</b>。`;
+
 const CAP_WHY = {
   kernelPath:'この環境にはカーネルからユーザ空間へのリングバッファが無い。'+
              '<code>syscall</code> ソース自体が消えるわけではないが、'+
@@ -326,6 +365,30 @@ const loadLocked = () => {
 const listeners = new Set();
 export function onCampaignChange(fn){ listeners.add(fn); return () => listeners.delete(fn); }
 function notify(ev){ for(const fn of listeners) fn(ev); }
+
+/* ---------------------------------------------------------------- ledger
+   The scoring lane needs to know what happened. Two ways to expose that, and
+   this does both on purpose:
+
+     push   notify({type:'ledger', entry}) for anything that wants to react
+     pull   ledger() for anything that has to rebuild the number from scratch
+
+   Pull is the authority. A score that can only be accumulated from events
+   cannot survive a reload or a save file, and progress is already saved.
+
+   Deliberately NOT called `budget`: GAME.budget is how many detections an
+   overload is still allowed to steal during one attack, and reusing the name
+   would collide with the wave walk. This file records facts and never scores
+   them — the point formula belongs to the scoring lane. */
+GAME.ledger = [];
+function ledgerAdd(kind, detail){
+  const entry = {seq:GAME.ledger.length, kind, ...detail};
+  GAME.ledger.push(entry);
+  notify({type:'ledger', entry});
+  return entry;
+}
+const ledger = () => GAME.ledger.map(e => ({...e}));
+
 
 /* ---------------------------------------------------------------- world state */
 const canBuild = id => DEPS[id].every(k => GAME.built.has(k));
@@ -459,6 +522,9 @@ function startScenario(id){
   if(!validated(sc)) return false;
 
   const env = envOf(sc);
+  /* a scenario is a fresh account: the scoring lane must be able to tell runs
+     inside one situation from a different situation entirely */
+  GAME.ledger = [];
   GAME.scenario = sc.id;
   GAME.on = true;
   GAME.built = new Set(['workloads', ...sc.start.built]);
@@ -496,6 +562,7 @@ function startScenario(id){
   S.nodes = env.nodes;
   applyGameVisibility();
   applyShield();
+  ledgerAdd('scenario', {id:sc.id, stage:profile().stage});
   notify({type:'scenario', id:sc.id});
   return true;
 }
@@ -549,6 +616,11 @@ function evaluate(chain = activeChain(), opts = {}){
       /* the reason belongs to the capability that is missing, not to the step —
          otherwise a kernel-less environment gets told its rules are out of date */
       why = CAP_WHY[missingCaps[0]] || `この構成（${S.deploy}）では検知できない。`;
+    } else if(!maturityInstalled(s) || !priorityInScope(s)){
+      /* the rule is not on the node, or the policy has decided not to act on it.
+         Either way this is a POLICY decision and not a pipeline failure. */
+      caught = false; cause = 'policy';
+      why = POLICY_WHY(s);
     } else if(blind.length){
       caught = false; cause = 'blind';
       why = `ルールは読み込まれていて、<b>要求する syscall がトレースされていない</b> — `+
@@ -799,6 +871,7 @@ function build(id){
   applyGameVisibility();
   afterMove();
   if(id === 'sysdig') setMode('sysdig');
+  ledgerAdd('build', {id});
   notify({type:'build', id, unlock:UNLOCK[id] || ''});
   notifyNoise();
   return true;
@@ -809,6 +882,7 @@ function build(id){
 function requestBuild(id){
   if(!build(id)) return false;
   GAME.asks++;
+  ledgerAdd('ask', {id});
   notify({type:'asks'});
   return true;
 }
@@ -920,11 +994,16 @@ function announceWave(){
   const w = GAME.waveLog[GAME.waveLog.length-1];
   if(!w) return;
   const last = GAME.phase === 'over';
+  ledgerAdd('wave', {index:w.index, of:waves.length,
+    caught:(GAME.results||[]).filter(x=>x.caught).length,
+    missed:(GAME.results||[]).filter(x=>!x.caught).map(x=>({id:x.id, cause:x.cause}))});
   notify({type:'waveEnd', index:w.index, of:waves.length, jp:w.jp,
           hit:w.hit, steps:w.of, last, phase:GAME.phase,
           dropP:w.dropP, buriedP:w.buriedP});
   if(last){
     const st = goalStatus();
+    ledgerAdd('over', {run:GAME.runs, score:score(), cleared:!!(st && st.cleared),
+      vuln:{...profile().vuln}, stage:profile().stage});
     notify({type:'over', run:GAME.runs, score:score(), cleared:!!(st && st.cleared)});
   }
 }
@@ -972,6 +1051,12 @@ function setUiMode(m){
 
 export {
   GAME,
+  ledger,
+  ledgerAdd,
+  maturityInstalled,
+  priorityInScope,
+  MATURITIES,
+  PRIORITY_RANK,
   DEPS,
   BUILD_ORDER,
   UNLOCK,
