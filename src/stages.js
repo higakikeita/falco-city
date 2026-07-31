@@ -259,7 +259,8 @@ function insightFor(arch, stageId){
    the empty plot IS the situation. The one thing handed over is what the
    archetype cannot fix — 製造業's `falcoctl` follow that no ask will satisfy —
    and that only lands once the district is standing, so it is passed through
-   `unmet` by the caller when it builds. See BOARD §2 #49.
+   `unmet` by the caller when it builds. See BOARD §2 `D22` (the 番号 changed when
+   the board moved to lane prefixes; this used to read #49).
    ------------------------------------------------------------------ */
 function freeplayScenario(arch, stageId, opts = {}){
   const stage = stageById(stageId);

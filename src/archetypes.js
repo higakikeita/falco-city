@@ -58,16 +58,22 @@
  *     .burstiness number    0..1。**波打ち具合。** `buf_size_preset` が効くかを決める量
  *     .spike      number    ピーク時に base の何倍まで行くか
  *     .why        string
- *   ※ `burstiness` / `spike` には **まだモデル側の入口がありません**（BOARD §2 #46）。
+ *   ※ `burstiness` / `spike` には **まだモデル側の入口がありません**（BOARD §2 `D20`）。
  *     いまの `model()` の burst 項は `util` からの近似で、外から波打ち具合を与えられない。
  *     宣言だけ先に置いてあるのは、入口ができた瞬間に業種側を書き直さずに済ませるため。
+ *     **この3つのキー名は固定です**（`load.burstiness` / `load.spike` /
+ *     `alerts.perNodeMul`）。ルールレーンが受け入れ側をこの名前に合わせているので、
+ *     改名するときは `CONTRACT-datalayer.md` §2 と同時に動かしてください。
+ *     GAP は `scripts/harness/cases-data.mjs` が記録しています（赤にはしません —
+ *     受け入れ口はルールレーンの持ち物）。
  *
  *   alerts        ノイズ機構（state.js §noise `buried = 1 - 処理能力/流入`）への入力
  *     .perNodeMul number    1ノードが出すアラート量の係数
  *     .why        string
- *   ※ これも **入口がありません**（BOARD §2 #47）。いまの `noise()` は
+ *   ※ これも **入口がありません**（BOARD §2 `D21`）。いまの `noise()` は
  *     `SOC.perNode * S.nodes * S.load` で、業種ごとの係数を受け取れない。
- *     いまはノード数と負荷でしか表現できないので、下の `estate` がその代役です。
+ *     いまはノード数と負荷でしか表現できないので、下の `estate` がその代役です
+ *     （Web を 8 ノードにしてあるのはそのため）。
  *
  *   estate        資産の形。ノード数とノードの大きさは**別の軸**（INVARIANTS 3.6）
  *     .nodes      number    既定のノード数。アラート量に効く
@@ -181,6 +187,11 @@ const ARCHETYPES = [
        NOT follow them — which costs the `imds` detection — and one more step
        still goes to the queue. Sysdig's correlation clears the queue and keeps
        all seven. **Both stacks clear; they pay differently.** */
+    /* MEASURED, not asserted — cases-data.mjs re-measures every number here.
+       `mode` names which of the two drop failure modes dominates (INVARIANTS 1.3). */
+    evidence:{ mode:'sustained', defaultDropPct:30.10, defaultBuriedPct:65.87,
+               fixedDropPct:0.00,
+               ineffectiveDropPct:{ 'buf_size_preset':29.64, 'cpus_for_each_buffer':18.67 } },
     goal:{ detect:5, contain:false, maxAsks:3, maxDropPct:5, maxBuriedPct:20,
            minPassRatio:null, maxRuns:null, lockLoad:true },
     insight:{
@@ -265,6 +276,10 @@ const ARCHETYPES = [
       { id:'kafka', jp:'Kafka', kind:'queue', patchable:true,
         why:'取引の流れ。ここが止まると決済が止まるのでパッチが後回しになる' }
     ],
+    evidence:{ mode:'sustained', defaultDropPct:3.36, defaultBuriedPct:34.84,
+               fixedDropPct:0.12,
+               ineffectiveDropPct:{ 'buf_size_preset':3.17,
+                                    'syscall_event_drops.actions':3.36 } },
     goal:{ detect:6, contain:true, maxAsks:4, maxDropPct:0.5, maxBuriedPct:15,
            minPassRatio:40, maxRuns:null, lockLoad:true },
     insight:{
@@ -335,6 +350,12 @@ const ARCHETYPES = [
       { id:'mysql', jp:'MySQL', kind:'database', patchable:true,
         why:'課金と進行の保存先' }
     ],
+    /* the only archetype whose `sustained` is 0: everything it loses is burst,
+       which is the one place buf_size_preset is the answer (INVARIANTS 1.3) */
+    evidence:{ mode:'burst', defaultDropPct:0.18, defaultBuriedPct:32.99,
+               fixedDropPct:0.08,
+               ineffectiveDropPct:{ 'base_syscalls.custom_set':0.00,
+                                    'cpus_for_each_buffer':5.19 } },
     goal:{ detect:5, contain:false, maxAsks:3, maxDropPct:0.10, maxBuriedPct:20,
            minPassRatio:40, maxRuns:null, lockLoad:true },
     insight:{
@@ -369,9 +390,20 @@ const ARCHETYPES = [
       key:'env',
       owner:'platform',
       ineffective:['buf_size_preset','cpus_for_each_buffer'],
+      /* THE DEADLINE IS NOT 2026-12-04 HERE. An earlier draft of this file put
+         that date on the Falco probe; it belongs to the SYSDIG legacy eBPF
+         driver (docs.sysdig.com · "This driver will be retired on December 4,
+         2026."). Falco's legacy eBPF probe is a VERSION deadline instead:
+         deprecated in 0.43.0, removed in 0.44.0 (falco.org/blog/falco-0-44-0 ·
+         "The `engine.ebpf` configuration block and the corresponding `ebpf`
+         engine kind have been removed."). Both are real, both are sourced, and
+         they belong to different clocks — versions.js §DEPRECATIONS holds both
+         and §LINES is where the distinction lives. Saying it wrong here would
+         teach a date that does not exist. See BOARD §2 D2 / D3. */
       why:'ノードは 2 vCPU で、大きくできない。<code>kmod</code> は特権制約で挿せず、'+
           '<code>modern_ebpf</code> はカーネル 5.8 未満で動かないので'+
-          '<b>legacy eBPF しか残っていない</b>（そしてそれは 2026-12-04 に廃止される）。'+
+          '<b>legacy eBPF しか残っていない</b> — そして Falco はそれを '+
+          '<b>0.43.0 で非推奨・0.44.0 で削除</b>した。'+
           'バッファを刻んでも消費能力は上がらない。'+
           '<b>残る手は入力を絞ることだけで、それは盲点を作る側の手</b>。'
     },
@@ -405,9 +437,12 @@ const ARCHETYPES = [
         k8sMeta:'apiserver が無いので <code>k8smeta</code> は繋ぐ相手がいない。',
         driver:'<code>kmod</code> は完全な権限を要求するので挿せない。'+
                '<code>modern_ebpf</code> は kernel ≥ 5.8 ＋ BTF が要るので'+
-               'このカーネルでは動かない（INVARIANTS 3.3）。'+
-               '<b>残るのは legacy eBPF だけで、それは 2026-12-04 に廃止される。</b>'+
-               '「上げないと詰む」がこの業種では最初から立っている。'
+               'このカーネルでは動かない（INVARIANTS 3.3。'+
+               '<b>ただし 5.8 は厳密な線ではなく</b>、厳密なのは BTF と '+
+               'BPF リングバッファの有無 — 一次資料が両方そう書いています）。'+
+               '<b>残るのは legacy eBPF だけで、Falco はそれを 0.44.0 で削除した。</b>'+
+               '「上げないと詰む」がこの業種では最初から立っていて、'+
+               'しかも<b>上げた先に乗るドライバが無い</b>のがこの業種の本当の行き止まり。'
       }
     },
     policy:{
@@ -430,16 +465,33 @@ const ARCHETYPES = [
       why:'SaaS に出せない構成なので OSS 自前が事実上の唯一解。'+
           '<b>ただし手数を全部自分で払う</b>ことになり、'+
           '止める手（応答）はこの構成では存在しない。' },
+    /* FIVE components, and `patchable:false` on every one. This is where the
+       archetype's difficulty comes from — not from a multiplier. src/vulns.js
+       discloses 17 holes across these five and `patch.blocked` is true for all of
+       them, so the backlog only ever grows and 検知 is the only control left
+       (GAME-DESIGN §4 ① / §4 ⑤). The other three archetypes carry 12–16 holes
+       and can close them. */
     middleware:[
       { id:'legacy-kernel', jp:'古いカーネル（5.8 未満）', kind:'os', patchable:false,
         why:'ベンダ検証済みの構成から動かせない。<b>パッチが使えない</b>の本体' },
       { id:'opcua-gateway', jp:'OPC UA ゲートウェイ', kind:'ot-protocol', patchable:false,
         why:'ライン停止なしに更新できない。脆弱性が積み上がる一方' },
       { id:'legacy-jvm', jp:'古い JVM', kind:'runtime', patchable:false,
-        why:'アプリがそのバージョンでしか動かない' },
+        why:'アプリがそのバージョンでしか動かない。'+
+            '<b>金融決済の JVM と同じ部品で、置かれ方だけが違う</b>' },
       { id:'modbus-bridge', jp:'Modbus ブリッジ', kind:'ot-protocol', patchable:false,
-        why:'認証の概念が無い世代のプロトコル。検知でしか受けられない' }
+        why:'認証の概念が無い世代のプロトコル。検知でしか受けられない' },
+      { id:'legacy-middleware', jp:'ベンダ製の生産管理ミドルウェア', kind:'appliance',
+        patchable:false,
+        why:'サポート契約の中でしか動かせない。'+
+            '<b>修正版が出ていないので、依頼を何回積んでも当たらない</b>' }
     ],
+    /* `mode:'config'`: the hole is the ENVIRONMENT, not the load — which is why
+       this is the one archetype whose test run also fails (insight.truth) */
+    evidence:{ mode:'config', defaultDropPct:22.78, defaultBuriedPct:0.00,
+               fixedDropPct:0.00,
+               ineffectiveDropPct:{ 'buf_size_preset':22.43,
+                                    'cpus_for_each_buffer':22.78 } },
     goal:{ detect:4, contain:false, maxAsks:2, maxDropPct:5, maxBuriedPct:20,
            minPassRatio:null, maxRuns:null, lockLoad:true },
     insight:{
@@ -593,6 +645,71 @@ const canResizeNode = arch => !(arch && arch.estate && arch.estate.lockCpus);
 const starLever = arch => (arch && arch.lever) || null;
 const isIneffective = (arch, leverName) =>
   !!(arch && arch.lever && (arch.lever.ineffective || []).includes(leverName));
+
+/* ------------------------------------------------------------------
+   WHAT CHOOSING THIS COSTS YOU, BEFORE YOU CHOOSE IT.
+   ------------------------------------------------------------------
+   GATE-FREEPLAY V2: 「①〜④ の選択が、それぞれ何を変えるのか選ぶ前に読める」.
+   The screen lane asked for the CONSEQUENCE of the choice rather than a
+   description of it (BOARD §2 #S7), and it was right to: `blurb` and `lesson`
+   tell you what the industry is like, not what happens when you pick it.
+
+   Every number below is `evidence`, and every number in `evidence` was MEASURED
+   against this repository's own model — the same values the comment block above
+   each archetype carries, promoted out of comments so a screen can print them.
+   `scripts/harness/cases-data.mjs` re-measures all of them, so a screen showing
+   `evidence` cannot show a stale number: the harness goes red first.
+
+   This returns data only. No sentence is assembled here — the screen decides how
+   to lay `failureMode` / `fixedBy` / `notFixedBy` out, and the words come from
+   the archetype's own `why` fields.
+   ------------------------------------------------------------------ */
+function leverBriefing(arch){
+  if(!arch || !arch.lever) return null;
+  const ev = arch.evidence || {};
+  return {
+    id:arch.id,
+    /* ① what breaks by default, and how much */
+    failureMode:{
+      kind:ev.mode || null,                /* 'sustained' | 'burst' | 'config' */
+      dropPct:ev.defaultDropPct ?? null,
+      buriedPct:ev.defaultBuriedPct ?? null,
+      why:arch.lesson
+    },
+    /* ② the lever that answers it, and who owns it */
+    fixedBy:{
+      star:arch.lever.star, key:arch.lever.key, owner:arch.lever.owner,
+      dropPct:ev.fixedDropPct ?? null,
+      why:arch.lever.why
+    },
+    /* ③ THE FALSIFIABLE HALF: levers that do NOT answer it, with the numbers.
+       This is what stops an archetype being a difficulty slider — a player can
+       try them and watch nothing happen. */
+    notFixedBy:(arch.lever.ineffective || []).map(name => ({
+      lever:name,
+      dropPct:(ev.ineffectiveDropPct || {})[name] ?? null
+    })),
+    /* ④ what the industry forbids, so the picker can grey things out with a reason */
+    constraints:{
+      axes:Object.keys((arch.env && arch.env.axes) || {}).map(axis => ({
+        axis, forced:forcedAxisValue(arch, axis),
+        rule:arch.env.axes[axis], why:(arch.env.why || {})[axis] || null
+      })),
+      tune:Object.keys((arch.policy && arch.policy.tune) || {}).map(key => ({
+        key, forced:forcedTuneValue(arch, key),
+        rule:arch.policy.tune[key], why:(arch.policy.why || {})[key] || null
+      })),
+      districts:forbiddenDistricts(arch),
+      unsatisfiable:unsatisfiableRequirements(arch),
+      lockCpus:!canResizeNode(arch),
+      why:{ districts:(arch.policy.why || {}).districts || null,
+            unsatisfiable:(arch.policy.why || {}).unsatisfiable || null }
+    },
+    /* ⑤ what winning looks like here */
+    goal:{...arch.goal},
+    stack:{...arch.stack}
+  };
+}
 
 
 /* ============================================================
@@ -748,5 +865,6 @@ export {
   estateOf,
   canResizeNode,
   starLever,
-  isIneffective
+  isIneffective,
+  leverBriefing
 };

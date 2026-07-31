@@ -184,8 +184,11 @@ const VERSIONS = [
     src:['https://falco.org/blog/falco-0-37-0/',
          'https://github.com/falcosecurity/plugins/tree/main/plugins/k8smeta'],
     notes:'新しい経路は k8smeta プラグイン ＋ k8s-metacollector（別に建てるもの）。'+
-          '<b>0.37〜0.39 は谷になる</b>: 本体クライアントは無く、'+
-          'いま配られている k8smeta プラグインは 0.40.0 以上を要求する（repairedBy.minVer）'
+          '<b>0.37〜0.39 で直すには古いプラグイン系列が要る</b>: '+
+          'k8smeta の README は「いまの版は Falco >= 0.40.0 を要求する。'+
+          'それより古い Falco（>= 0.37.0）では plugin version 0.2.x を使え」と'+
+          '書いている。つまり谷は<b>直せないのではなく、置いていかれた系列に降りる</b>形 — '+
+          '取れる部品が現行のものではなくなる'
   },
   {
     id:'falco-0.38', line:'falco', ver:'0.38.0', released:'2024-05-30',
@@ -481,6 +484,17 @@ const DEPRECATIONS = [
     by:['modern_ebpf','kmod'],
     why:'非推奨は 0.43.0、削除は 0.44.0。<code>engine.ebpf</code> と '+
         '<code>ebpf</code> エンジン種別が消え、Modern eBPF か kernel module に移る以外に無い。',
+    /* TWO SOURCES, TWO DIFFERENT HALVES — and they are not interchangeable.
+       The proposal fixes the DEPRECATION at 0.43.0 ("deprecations will first be
+       enforced in the stable Falco version 0.43.0") and only sets a FLOOR for
+       removal ("components cannot be removed before Falco 0.44.0"); it says
+       outright that it does not detail the eventual removal. The fact that
+       removal actually LANDED in 0.44.0 comes from the release blog. Citing the
+       proposal for the removal version would be reading a schedule into a
+       document that declines to give one. */
+    srcFor:{ deprecation:'https://github.com/falcosecurity/falco/blob/master/proposals/'+
+                         '20251215-legacy-bpf-grpc-output-gvisor-engine-deprecation.md',
+             removal:'https://falco.org/blog/falco-0-44-0/' },
     src:['https://falco.org/blog/falco-0-44-0/',
          'https://github.com/falcosecurity/falco/blob/master/proposals/'+
          '20251215-legacy-bpf-grpc-output-gvisor-engine-deprecation.md'] },
@@ -569,9 +583,11 @@ const CLAIMS = [
      version >= 0.40.0." と書いている。0.37 で導入された当初の世代の話ではなく、
      いま配られているものの下限。BOARD §2 D1。 */
   { id:'k8smeta-plugin-min-version', invariant:null, status:'verified',
-    jp:'いま配られている k8smeta プラグインは Falco 0.40.0 以上を要求する',
+    jp:'いま配られている k8smeta プラグインは Falco 0.40.0 以上を要求する'+
+       '（0.37〜0.39 には plugin 0.2.x 系列が案内されている）',
     covers:['k8smeta','k8smeta_plugin'],
-    src:['https://github.com/falcosecurity/plugins/tree/main/plugins/k8smeta'] },
+    src:['https://raw.githubusercontent.com/falcosecurity/plugins/main/'+
+         'plugins/k8smeta/README.md'] },
 
   /* 2件目。INVARIANTS に無い。一次資料は取れたが、**持ち主が違っていた**:
      2026-12-04 は Sysdig の legacy eBPF ドライバの廃止日で、Falco の legacy
@@ -583,6 +599,10 @@ const CLAIMS = [
     covers:['sysdig-legacy-ebpf','sysdig_legacy_ebpf'],
     src:['https://docs.sysdig.com/en/sysdig-secure/classic-agent-drivers/'] },
 
+  /* 非推奨の版は proposal が、削除が実際に 0.44.0 で起きたことは 0.44.0 の
+     リリースブログが出典。proposal は「0.44.0 より前には消せない」という下限しか
+     書いておらず、削除の予定は明示的に扱っていない（本文に "doesn't detail any
+     aspect of the eventual removal"）。**片方を他方の出典にしないこと。** */
   { id:'falco-legacy-ebpf-removal', invariant:null, status:'verified',
     jp:'Falco の legacy eBPF プローブは 0.43.0 で非推奨・0.44.0 で削除（版の締切）',
     covers:['falco-legacy-ebpf','legacy-ebpf-removed','deprecation-warnings-0.43','ebpf'],

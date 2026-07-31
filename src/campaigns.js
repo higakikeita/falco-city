@@ -117,10 +117,20 @@ const intentById = id => INTENTS.find(i => i.id === id) || INTENTS[4];
      patched      vulnerability ids that are closed
      stack        'oss' | 'sysdig'. Affects PRIORITISATION only, never detection
      profile      the archetype id, and which chain steps its business is
-                  exposed to. Optional. */
+                  exposed to. Optional.
+     forbidden    REMEDY KINDS THIS SITUATION CANNOT PERFORM — 'follow', 'update',
+                  'untrace', 'build', 'patch'. Not a difficulty setting: it is
+                  archetypes.js §policy.unsatisfiable made legible to the
+                  generator. 製造業 can stand falcoctl up but cannot reach an OCI
+                  registry, so `artifact.follow.refs` never comes true and every
+                  incubating / sandbox detection is permanently out of reach.
+                  WITHOUT THIS FIELD THE GENERATOR CANNOT TELL A CEILING FROM A
+                  DEAD END, and it produced campaigns where four of five steps had
+                  no answer at all (measured: 製造業 dropped to 20% coverage with
+                  0 moves available at tick 12–24). See §fairness pass 3. */
 const POSTURE_DEFAULTS = {
   built:[], caps:['kernelPath'], tracedOff:[], following:true,
-  rulesetTick:null, patched:[], stack:'oss', profile:null, focus:[]
+  rulesetTick:null, patched:[], stack:'oss', profile:null, focus:[], forbidden:[]
 };
 function normalisePosture(postureIn = {}){
   const p = { ...POSTURE_DEFAULTS, ...postureIn };
@@ -133,7 +143,8 @@ function normalisePosture(postureIn = {}){
     patched:[...new Set(p.patched || [])],
     stack: p.stack === 'sysdig' ? 'sysdig' : 'oss',
     profile: p.profile || null,
-    focus:[...new Set(p.focus || [])]
+    focus:[...new Set(p.focus || [])],
+    forbidden:[...new Set(p.forbidden || [])]
   };
 }
 
@@ -311,7 +322,20 @@ const FAIRNESS = {
   maxRemedies:3,     // distinct moves needed to close one campaign: one turn
   minCatchable:1,    // the player has to see that the campaign happened
   minSteps:2,
-  maxSteps:5
+  maxSteps:5,
+  /* A CEILING IS CONTENT. A DEAD END IS A BUG.
+     製造業 genuinely cannot obtain an incubating detection: falcoctl stands but
+     `artifact.follow.refs` never resolves on an isolated network, and every one
+     of its components has `patch.blocked`. So SOME steps have no answer, and that
+     is the lesson the archetype exists to teach — GAME-DESIGN §4 ① calls it
+     「パッチが使えない → 検知が唯一の統制」 and archetypes.js declares the resulting
+     ceiling as `goal.detect:4` out of seven.
+     What is NOT the lesson is a whole campaign of them. Measured before this cap:
+     製造業 sat at 20% coverage with ZERO available moves from tick 12 onward —
+     four of five steps unanswerable, nothing to do, no way to read why. That is
+     不条理, and GATE-FREEPLAY F6 is the line. One per campaign keeps the ceiling
+     visible and keeps the turn playable. */
+  maxUnanswerable:1
 };
 
 /* ---------------------------------------------------------------- generate
@@ -359,7 +383,36 @@ function generateCampaign(opts = {}){
 
   const want = Math.max(FAIRNESS.minSteps,
                 Math.min(FAIRNESS.maxSteps, opts.size ?? 4, ranked.length));
-  let picked = ranked.slice(0, want);
+
+  /* --- selection: rank order, capped on steps with no answer at all -------
+     `answerable` asks the question auditCampaign() asks, at generation time, so
+     the generator cannot produce what the audit will then call a dead end. It has
+     to consult `p.forbidden` — without it a step whose only remedy is
+     `follow` looks answerable to the generator and unanswerable to the audit,
+     and the two disagreeing is what let 製造業 ship at 20% coverage. */
+  const answerable = x => {
+    if(!x.ev.evades) return true;
+    return remediesForStep(x.st, p, vulnIndex)
+      .some(r => !r.blocked && !p.forbidden.includes(r.kind));
+  };
+  let picked = [], dead = 0;
+  for(const x of ranked){
+    if(picked.length >= want) break;
+    if(!answerable(x)){
+      if(dead >= FAIRNESS.maxUnanswerable) continue;
+      dead++;
+    }
+    picked.push(x);
+  }
+  /* If the ceiling really is all there is, SAY SO rather than pad the campaign
+     with steps that do not exist. `ceiling` rides out on the return value so the
+     debrief can name it — silence here would be the same bug one layer up. */
+  const ceiling = picked.length < FAIRNESS.minSteps;
+  if(ceiling)
+    for(const x of ranked){
+      if(picked.length >= Math.min(want, ranked.length)) break;
+      if(!picked.includes(x)) picked.push(x);
+    }
 
   /* --- fairness pass 1: one turn has to be enough to close the campaign ---- */
   const distinct = list => new Set(list
@@ -417,6 +470,12 @@ function generateCampaign(opts = {}){
        instead of the player having to guess */
     aim: evading.map(x => ({ step:x.st.id, cause:x.ev.cause, target:x.ev.target })),
     novel: steps.filter(s => s.newRule).map(s => s.id),
+    /* steps this situation structurally cannot answer, and whether that is ALL
+       there was. `unanswerable` is expected to be 0 or 1 (§FAIRNESS.maxUnanswerable);
+       `ceiling:true` means the environment offered nothing else, which is a real
+       state for 製造業 and a bug report for anyone else. */
+    unanswerable: picked.filter(x => !answerable(x)).map(x => x.st.id),
+    ceiling,
     fairness:{ ...FAIRNESS }
   };
 }
@@ -424,7 +483,7 @@ function generateCampaign(opts = {}){
 function emptyCampaign(tickNo, seedIn, p, jp){
   return { id:`c${tickNo}-${seedIn}`, tick:tickNo, seed:seedIn, profile:p.profile,
            intent:'sweep', jp, brief:jp, waves:[], steps:[], targets:[], aim:[],
-           novel:[], fairness:{ ...FAIRNESS } };
+           novel:[], unanswerable:[], ceiling:false, fairness:{ ...FAIRNESS } };
 }
 function hashSeed(str){
   let h = 2166136261;
@@ -467,7 +526,9 @@ function generateSeries(opts = {}){
    step is not difficulty — it is a generated dead end. The count has to be 0. */
 function auditCampaign(campaign, postureIn, opts = {}){
   const p = normalisePosture(postureIn);
-  const forbidden = new Set(opts.forbidden || []);
+  /* the posture carries what this situation cannot do, so a caller that forgot
+     opts.forbidden still gets the honest answer rather than an optimistic one */
+  const forbidden = new Set(opts.forbidden || p.forbidden);
   const vulnIndex = new Map((opts.vulns || []).map(v => [v.id, v]));
   const rows = campaign.steps.map(st => {
     const ev = evadesPosture(st, p);
@@ -493,6 +554,23 @@ function auditCampaign(campaign, postureIn, opts = {}){
     .filter(r => !r.blocked && !forbidden.has(r.kind) && kindTest(r.kind))
     .map(r => `${r.kind}:${r.target}`))];
   const moves = pick(k => k !== 'patch');
+  /* WHAT F6 ACTUALLY ASKS (GATE-FREEPLAY §1): 「生成された組み合わせに打つ手が必ず
+     存在する（理不尽でない）」— a MOVE has to exist, not a perfect score.
+     Three conditions, and the middle one is the correction:
+
+       1. closing what can be closed fits in one turn      moves <= maxRemedies
+       2. the ceiling stays a ceiling and not the whole     unanswerable <= maxUnanswerable
+          campaign
+       3. if anything got through, there is something       evading -> moves > 0
+          to do about it
+
+     The earlier definition demanded `unanswerable === 0`, which no 製造業 campaign
+     can satisfy and no 製造業 campaign SHOULD — its declared ceiling is 4 of 7
+     (archetypes.js §industrial-ot goal.detect). Reading F6 as "zero unanswerable"
+     would have forced either a fake patch route onto unpatchable OT kit or a fake
+     OCI path onto an isolated network. `deadEnd` is the real failure: steps got
+     through and the player has nothing to play. */
+  const deadEnd = evading.length > 0 && moves.length === 0;
   return {
     steps:rows.length,
     caught:rows.length - evading.length,
@@ -501,7 +579,10 @@ function auditCampaign(campaign, postureIn, opts = {}){
     unanswerable,
     moves,                       /* the closing set: detection */
     options: pick(k => k === 'patch'),   /* the other answer: prevention */
-    fair: unanswerable.length === 0 && moves.length <= FAIRNESS.maxRemedies
+    deadEnd,
+    fair: !deadEnd
+       && unanswerable.length <= FAIRNESS.maxUnanswerable
+       && moves.length <= FAIRNESS.maxRemedies
   };
 }
 

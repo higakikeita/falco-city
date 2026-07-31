@@ -381,7 +381,63 @@ function ledgerSummary(ledger, opts){
     prices: priceList(ledger.tick),
     recent: ledger.log.slice(Math.max(0, ledger.log.length - tail))
       .map(e => ({...e, jp:(REASONS[e.key] || {}).jp || e.key})),
-    truncated: Math.max(0, ledger.log.length - tail)
+    truncated: Math.max(0, ledger.log.length - tail),
+    /* 1件ずつの内訳が要るなら `ledgerBreakdown()`。ここで再導出しないこと */
+    breakdown: ledgerBreakdown(ledger)
+  };
+}
+
+/* ---------------------------------------------------------------- 内訳（画面向け）
+ * 画面レーンが指定した形（BOARD §2 #S5 · GATE-FREEPLAY V5）。
+ *
+ *   [{ kind:'gain' | 'loss' | 'spend', key, delta, why? }] ＋ 期首残高 / 期末残高
+ *
+ * `ledgerSummary()` は **集計**（キーごとの合計）を返しますが、こちらは
+ * **1件ずつ**返します。「なぜ減ったか」を時系列で言うにはそちらが要る、という
+ * 画面側の指摘は正しく、集計では「同じ理由で3回減った」が1行に潰れます。
+ *
+ * ------------------------------------------------------------------ 文言について
+ * **`key` が機械可読な正で、画面はそれだけで描けます。** `jp` も付けてありますが
+ * **省略可能な便宜**です。BOARD #47（「文言は `REASONS` が持つので `ui.js` に
+ * 日本語を書かない」）と #S5（「文言は画面側が持つので `key` だけ返せ」）が
+ * 逆のことを言っていたので、**両方満たせる形にしました** — 使う側が選べます。
+ *
+ * `delta` は**符号付き**です: `gain` が正、`loss` と `spend` が負。呼ぶ側が
+ * `kind` を見て符号を決め直す必要はありません（それをさせると2か所で決まります）。
+ */
+const KIND_OF = { earn:'gain', lose:'loss', spend:'spend' };
+
+function ledgerBreakdown(ledger, opts){
+  const o = opts || {};
+  const from = Number.isFinite(o.sinceTick) ? Math.max(0, Math.round(o.sinceTick)) : null;
+  const entries = [];
+  for(const e of (ledger.log || [])){
+    if(from !== null && e.tick < from) continue;
+    /* 0 点の加算行も残します。**「守れていたのに 0 点だった」は情報**で、
+       落とすと停止中の tick が履歴から消えます（`key:'dead'` / `'halted'`）。 */
+    const row = {
+      kind: KIND_OF[e.kind] || e.kind,
+      key: e.key,
+      delta: e.kind === 'earn' ? (e.amount || 0) : -Math.abs(e.amount || 0),
+      tick: e.tick
+    };
+    if(e.date) row.date = e.date;
+    if(e.count !== undefined && e.count !== 1) row.count = e.count;
+    if(e.ref) row.ref = e.ref;
+    /* `why` は省略可能な補足。`REASONS` の語と、加算の内訳（どの項が効いたか）。 */
+    const jp = (REASONS[e.key] || {}).jp;
+    if(jp) row.jp = jp;
+    if(e.parts && Object.keys(e.parts).length) row.parts = {...e.parts};
+    entries.push(row);
+  }
+  return {
+    opening: ledger.start,
+    closing: ledger.points,
+    net: ledger.points - ledger.start,
+    entries,
+    /* 期首と期末が entries で説明できること。ズレたらどこかが台帳を直接触っています */
+    reconciles: ledger.start + entries.reduce((s, e) => s + e.delta, 0) === ledger.points,
+    truncated: Math.max(0, (ledger.log || []).length - entries.length)
   };
 }
 
@@ -451,5 +507,6 @@ export {
   tickLedger,
   isBust,
   ledgerSummary,
+  ledgerBreakdown,
   scoreErrors
 };

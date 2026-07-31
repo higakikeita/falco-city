@@ -478,6 +478,115 @@ const CLAIMS = [
 const POLICY_DEFAULT = { maturity:'stable-only', minPriority:'debug',
                          response:'notify', managed:'none', dropAction:'alert' };
 
+/* ---------------------------------------------------------------- §LEVERS
+   WIDEN → / NARROW →, FOR EVERY POLICY LEVER.
+
+   GATE-FREEPLAY V2 wants the consequence of a choice readable BEFORE it is made,
+   and the screen lane asked for exactly this shape (BOARD §2 #S7): each lever
+   with its two directions and what each one costs. It is GAME-DESIGN §4 ④'s table
+   turned into data.
+
+   THE POINT OF THE TABLE IS THAT BOTH DIRECTIONS LOSE. If one direction were
+   simply better the lever would not be a decision, and 「全部入れて全部鳴らす」
+   would be the answer — which is the one thing this design denies. So every
+   entry below has a real cost on both sides.
+
+     owner     whose decision this is (campaign.js §ROLES). The hole shows up on
+               the SEAM between owners, which is why the owner is on the lever
+     wider     what widening buys, and what it costs
+     narrower  what narrowing buys, and what it costs
+     measured  the numbers behind it, re-measured by cases-data.mjs
+
+   `base_syscalls` is in this table even though it is the SRE's lever and lives in
+   state.js §TUNE_DEFAULTS, because the whole lesson is that it is the SAME SHAPE
+   one layer down with a DIFFERENT OWNER. Leaving it out would hide the seam. */
+const LEVERS = [
+  { id:'maturity', jp:'ルールセットの成熟度', owner:'detect',
+    key:'maturity', values:MATURITY_TIERS.map(t => t.id),
+    wider:{ jp:'incubating / sandbox も追従する',
+            gain:'<b>その集合にしか無い検知が手に入る</b>（IMDS からの資格情報窃取など）',
+            cost:'<b>アラート量が増え、本物が埋もれる圧が上がる</b>。'+
+                 '実験的なルールの誤検知を全部引き受けることになる' },
+    narrower:{ jp:'stable だけにする',
+            gain:'誤検知が最小。SOC のキューが空く',
+            cost:'<b>持っていないルールは鳴らない。</b>'+
+                 'incubating / sandbox にしか無い検知は最初から無い' },
+    measured:{ rules:{ 'stable-only':25, 'plus-incubating':56, 'plus-sandbox':93 },
+               buriedPct:{ following:34.84, notFollowing:2.38 },
+               alertsPerMin:{ following:61.4, notFollowing:41.0 } },
+    why:'広げると検知が増え、**同時に**埋没率が上がります。'+
+        'どちらも増えるので、これは損得ではなく<b>どちらで負けるかの選択</b>です。' },
+
+  { id:'minPriority', jp:'priority のしきい値', owner:'detect',
+    key:'minPriority', values:PRIORITIES.map(p => p.id),
+    wider:{ jp:'debug まで読み込む（既定）',
+            gain:'低い深刻度のルールも動く',
+            cost:'アラート量の大半は下の帯にあるので、<b>キューが最も重くなる</b>' },
+    narrower:{ jp:'critical 以上だけ読み込む',
+            gain:'アラート量がほぼ消える（量のシェア 1.00 → 0.04）',
+            cost:'<b>出力が絞られるのではなく、ルードが読み込まれません。</b>'+
+                 'だから<code>base_syscalls</code> の union の入力側も減り、'+
+                 '<b>要求 syscall が 8 → 2 本</b>になります — 集めなくなった分は'+
+                 '<b>後から遡れません</b>' },
+    measured:{ requiredSyscalls:{ debug:8, critical:2 },
+               volumeShare:{ debug:1.00, critical:0.04 } },
+    why:'falco.yaml が「しきい値以上のルールは <b>loaded and run</b> される」と'+
+        '書いているので、これは出力フィルタではありません。'+
+        '<b>検知層とカーネル層が触れる唯一の場所</b>で、向きは無害な方（絞ると'+
+        'traced が減る。逆は起きない）。出典は §CLAIMS `priority-threshold-loads`。' },
+
+  { id:'response', jp:'応答アクション', owner:'soc',
+    key:'response', values:RESPONSE_ACTIONS.map(a => a.id),
+    wider:{ jp:'止める（pause / stop / kill）',
+            gain:'<b>攻撃が実際に止まる</b>',
+            cost:'<b>止める手は目とは別の部品です。</b>OSS 自前なら Talon 相当を'+
+                 '建てないと存在せず、選んでも何も起きません' },
+    narrower:{ jp:'通知だけ',
+            gain:'建てるものが少ない',
+            cost:'<b>攻撃は続いています。</b>検知したことと止めたことは別' },
+    measured:{ stopsAttack:RESPONSE_ACTIONS.filter(a=>a.stops).map(a=>a.id),
+               needsBuilding:RESPONSE_ACTIONS.filter(a=>a.stops).map(a=>a.oss) },
+    why:'検知と応答は別の部品（INVARIANTS 5.1）。'+
+        '<b>選んだだけでは実在しない</b>ので `responseFor().real` を見てください。' },
+
+  { id:'dropAction', jp:'ドロップ時の挙動', owner:'sre',
+    key:'dropAction', values:DROP_ACTIONS.map(a => a.id),
+    wider:{ jp:'exit（止める）',
+            gain:'落ちていることを隠さない',
+            cost:'<b>エージェントが止まる = 検知がゼロになる。</b>'+
+                 '検知ゼロの時間が最大の減算です' },
+    narrower:{ jp:'ignore（黙る）',
+            gain:'アラートが増えない',
+            cost:'<b>黙って盲目になります。</b>落ちていることが記録にも残らない' },
+    measured:{ silent:DROP_ACTIONS.filter(a=>a.silent).map(a=>a.id),
+               stopsAgent:DROP_ACTIONS.filter(a=>a.stopsAgent).map(a=>a.id),
+               auditable:DROP_ACTIONS.filter(a=>a.audit).map(a=>a.id) },
+    why:'両端が2つの負け方そのものです。'+
+        '<b>規制のある業種は両端を選べません</b>（archetypes.js §fintech-payments）。' },
+
+  /* NOT this file's lever — state.js §TUNE_DEFAULTS owns it. It is here because
+     the seam is the lesson (GAME-DESIGN §4 ④): same shape, one layer down,
+     different owner. A screen showing the policy page without this row would
+     teach that noise is the detection engineer's whole problem. */
+  { id:'base_syscalls', jp:'base_syscalls.custom_set', owner:'sre',
+    key:'syscallSet', values:['all','default','custom'], foreign:'state.js',
+    wider:{ jp:'広く集める（all）',
+            gain:'計測できる範囲が広がる',
+            cost:'<b>リングバッファが落ちる。</b>そして落ちた分は遡れない' },
+    narrower:{ jp:'絞る（custom_set）',
+            gain:'流入が減り、ドロップが止まる',
+            cost:'<b>負の指定は計測できない盲点を作ります。</b>'+
+                 'ポリシーを全部入れても、そのルールが要求する syscall が'+
+                 '無ければ鳴りません（門は独立・§GATES `traced`）' },
+    measured:{ gateWhenNegated:'traced', silent:true },
+    why:'<b>穴はどちらのチームの中でもなく、境目に出ます。</b>'+
+        'これが役割層の狙いで、この行がその片側です。' }
+];
+
+const leverById = id => LEVERS.find(l => l.id === id) || null;
+/* the levers a given role actually owns, so the role-locked UI can grey the rest */
+const leversFor = owner => LEVERS.filter(l => l.owner === owner);
+
 
 /* ================================================================ functions
    Pure. `pol` is a POLICY_DEFAULT-shaped object, `ctx` is a plain object the
@@ -743,6 +852,9 @@ export {
   GATES,
   CLAIMS,
   POLICY_DEFAULT,
+  LEVERS,
+  leverById,
+  leversFor,
   claimById,
   claimFor,
   isFixed,
