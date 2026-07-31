@@ -7,6 +7,8 @@
     "build": "node build.mjs",
     "test": "node scripts/regress.mjs",
     "check": "node scripts/check-imports.mjs && node scripts/regress.mjs && node build.mjs && node scripts/check-build.mjs",
+    "package": "node build.mjs && node scripts/check-build.mjs && node scripts/package.mjs && node scripts/verify-zip.mjs",
+    "serve:zip": "node scripts/verify-zip.mjs --serve",
     "dev": "python3 -m http.server 8722 --directory src"
   },
   "devDependencies": {

@@ -2,6 +2,14 @@ name: Build and deploy to Pages
 
 # docs/ is a build artifact and is NOT committed. This is what produces it,
 # so parallel sessions never conflict over an 800KB generated file.
+#
+# It publishes docs/ as a DIRECTORY (upload-pages-artifact tars whatever is at
+# `path`), so the build splitting into several files needs no change here — that
+# was already true when docs/ was one file plus .nojekyll. What did need adding
+# is the second outlet: itch.io takes a zip, and a zip nobody has extracted and
+# served is not evidence. So `npm run package` runs in CI too, and the artifact
+# it produces is attached to the run — a release then does not depend on
+# whichever laptop last ran the build.
 on:
   push:
     branches: [main]
@@ -32,13 +40,28 @@ jobs:
       - name: The causal claims still hold (INVARIANTS.md)
         run: npm test
       - run: npm run build
-      - name: Sanity-check the generated single file
+      # entry present, every reference resolves, no absolute paths, size and
+      # file count within the caps. Works on either build shape.
+      - name: The generated docs/ is shippable
         run: node scripts/check-build.mjs
+      # build the itch.io zip, extract it, serve it from a nested base path and
+      # fetch everything the entry references. This is the SHIP GATE G6 step.
+      - name: The itch.io zip works when extracted and served
+        run: node scripts/package.mjs && node scripts/verify-zip.mjs
+      - name: Keep the zip with the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: itch-io-web-build
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/configure-pages@v5
         if: github.ref == 'refs/heads/main'
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:
+          # a directory, not a file — this is what makes the multi-file build a
+          # non-event for Pages
           path: docs
 
   deploy:
