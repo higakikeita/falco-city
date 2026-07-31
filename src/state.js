@@ -48,6 +48,11 @@ const S = {
   selected:null, hovered:null,
   tune:{...TUNE_DEFAULTS},
   dead:false,              // syscall_event_drops.actions: exit fired
+  /* BOARD #48. Two different endings, and the pipeline stops for both: `dead` is
+     the agent having exited on drops, `over` is the run being finished (points
+     ran out). The rules lane raises `over`; sim.js only reads it, so sim.js does
+     not have to import score.js. */
+  over:false,
   deadDrops:0,
   counters:{sys:0, ring:0, drop:0, rules:0, alerts:0},
   shown:{sys:0, ring:0, drop:0, rules:0, alerts:0},
@@ -102,9 +107,140 @@ const MATCH_RATE  = 0.004;    // of evaluated events, only a sliver rings
  *   apiServer   there is a control plane to audit
  *   cluster     there is a cluster, so cluster-scoped components exist */
 const deployment = () => byDeployId(S.deploy) || null;
-const hasCap = cap => !!deployment()?.[cap];
+/* The environment decides what exists; the agent version can only fail to see
+   it. So this is an AND — a newer agent never invents an API server, and an
+   older one can lose a field family it used to read (the in-process k8s client
+   removed in 0.37, INVARIANTS 3.7 — GATE-FREEPLAY V6). */
+const hasCap = cap => {
+  if(!deployment()?.[cap]) return false;
+  const v = profile().version.caps[cap];
+  return v === undefined ? true : !!v;
+};
 
 /* buf_size_preset 1..10 — powers of two, preset 4 = the 8 MiB default */
+
+/* ============================================================
+   DATA LAYER RECEIVING PORT
+   ------------------------------------------------------------
+   The data lanes hand over ONE plain-data object and this is where it lands.
+   Field names are NOT invented here — they are the ones src/archetypes.js
+   already declares, so an industry file does not get rewritten when the entry
+   point arrives (that file says so itself: "宣言だけ先に置いてあるのは、入口が
+   できた瞬間に業種側を書き直さずに済ませるため").
+
+   Three rules make this safe to depend on:
+
+     1. Injecting nothing reproduces today's numbers exactly. The defaults are
+        chosen so that `burstiness:0.5, spike:1.0, perNodeMul:1.0` IS the current
+        model, which means an un-merged data file cannot move main.
+     2. A profile supplies COEFFICIENTS and CONSTRAINTS, never a result. It
+        cannot set `sustained`, `util`, `dropP` or a detection — those stay
+        derived. That is what stops a data file bending causality.
+     3. The version axis can only TAKE capabilities away. An environment with no
+        API server does not grow one because the agent got newer.
+
+   Load-bearing consequence for GATE-FREEPLAY F1 ("業種ごとに主役のレバーが変わる"):
+   burstiness is what decides whether raising buf_size_preset does anything.
+   High burstiness + spike (game infra) -> the buffer is the answer. Low
+   burstiness with the load simply above capacity (web) -> it is not, because
+   `sustained` does not read bufPreset at all (INVARIANTS 1.3). Same model, two
+   industries, one number moved.
+   ============================================================ */
+const PROFILE_DEFAULTS = {
+  /* load.base        the production NODE LOAD multiplier (sustained pressure)
+     load.burstiness  0..1, how much the load waves. 0 = perfectly smooth, so no
+                      burst loss at all. 0.5 reproduces today's model.
+     load.spike       peak is base x spike. Feeds the BURST term only: a spike is
+                      an instant, and `sustained` is by definition not one. */
+  load:    { base:1.0, burstiness:0.5, spike:1.0 },
+  /* the alert-volume side of the noise model. Nothing here removes a detection */
+  alerts:  { perNodeMul:1.0, plugin:1.0, breadth:1.0, triage:1.0 },
+  /* which rule artifact sets are installed, and the priority floor the policy
+     acts on. Empty maturity list = every set installed, so the gate is open */
+  policy:  { maturity:[], minPriority:null },
+  /* agent version. `caps` is ANDed with the environment, never ORed */
+  version: { id:null, caps:{} },
+  /* material for attack generation and for the scoring lane. Read-only here */
+  vuln:    { open:0, oldestDays:0, inUseShare:0 },
+  /* which stage is being played, and the per-stage overrides the DATA declares.
+     Deliberately not hardcoded: a quieter test stage is a claim the data makes */
+  stage:   'prod',
+  stages:  {}
+};
+
+/* burstiness 0..1 -> multiplier on the burst term. 0.5 is the reference, so the
+   default profile and an explicit 0.5 agree, and 0 removes burst loss entirely. */
+const BURST_REF = 0.5;
+
+const SECTIONS = ['load','alerts','policy','version','vuln','stage','stages'];
+const cloneProfile = v => JSON.parse(JSON.stringify(v));
+
+let _base = cloneProfile(PROFILE_DEFAULTS);
+let _profile = cloneProfile(PROFILE_DEFAULTS);
+
+/* one level deep per section, so a partial profile is a legal profile */
+function mergeProfile(into, from){
+  const out = cloneProfile(into);
+  for(const k of SECTIONS){
+    if(from?.[k] === undefined) continue;
+    out[k] = (k === 'stage') ? from[k]
+           : (typeof from[k] === 'object' && !Array.isArray(from[k]))
+             ? {...out[k], ...from[k]} : from[k];
+  }
+  return out;
+}
+
+/* Report problems instead of throwing: a malformed data file must not take the
+   game down, it must surface as a named error the way SCENARIO_ERRORS does. */
+function profileErrors(p){
+  const e = [];
+  if(p === null || typeof p !== 'object' || Array.isArray(p)) return ['profile must be an object'];
+  for(const k of Object.keys(p))
+    if(!SECTIONS.includes(k)) e.push(`unknown section: ${k}`);
+  const num = (v,n,max) => {
+    if(v === undefined) return;
+    if(!(typeof v === 'number' && Number.isFinite(v) && v >= 0))
+      e.push(`${n} must be a finite number >= 0`);
+    else if(max !== undefined && v > max) e.push(`${n} must be <= ${max}`);
+  };
+  num(p.load?.base,'load.base');
+  num(p.load?.burstiness,'load.burstiness', 1);
+  if(p.load?.spike !== undefined && !(typeof p.load.spike === 'number' && p.load.spike >= 1))
+    e.push('load.spike must be a number >= 1 (a peak is not below the baseline)');
+  for(const k of ['perNodeMul','plugin','breadth','triage']) num(p.alerts?.[k], `alerts.${k}`);
+  if(p.policy?.maturity !== undefined && !Array.isArray(p.policy.maturity))
+    e.push('policy.maturity must be an array of maturity ids');
+  if(p.version?.caps !== undefined &&
+     (typeof p.version.caps !== 'object' || Array.isArray(p.version.caps)))
+    e.push('version.caps must be an object of capability -> boolean');
+  for(const k of ['open','oldestDays','inUseShare']) num(p.vuln?.[k], `vuln.${k}`);
+  if(p.stage !== undefined && typeof p.stage !== 'string') e.push('stage must be a string');
+  try { JSON.parse(JSON.stringify(p)); } catch { e.push('profile must survive JSON (plain data only)'); }
+  return e;
+}
+
+/* hand over a profile. Returns the errors it found; on error nothing changes. */
+function setProfile(p){
+  const errs = profileErrors(p);
+  if(errs.length) return errs;
+  _base = mergeProfile(PROFILE_DEFAULTS, p);
+  applyStage(_base.stage);
+  return [];
+}
+/* switch stage using the overrides the DATA declared */
+function applyStage(name){
+  const over = _base.stages?.[name];
+  _profile = over ? mergeProfile(_base, over) : cloneProfile(_base);
+  _profile.stage = name;
+  return _profile.stage;
+}
+const setStage = applyStage;
+const profile = () => _profile;
+const resetProfile = () => {
+  _base = cloneProfile(PROFILE_DEFAULTS);
+  _profile = cloneProfile(PROFILE_DEFAULTS);
+};
+
 const PRESET_MIB = p => Math.pow(2, p-1);
 
 /* How much of the syscall stream the driver is told to forward.
@@ -188,7 +324,8 @@ const drainCap = () =>
    ------------------------------------------------------------------ */
 function model(){
   const t = S.tune;
-  const inflow = S.load * SET_MUL[t.syscallSet];
+  const P = profile();
+  const inflow = S.load * P.load.base * SET_MUL[t.syscallSet];
 
   /* the drain side is a property of the NODE — its size, and how its buffers are
      cut up — not of how many nodes the cluster grew to. Defaults (8 CPU / preset
@@ -201,7 +338,11 @@ function model(){
   const util      = inflow / cap;
   const sustained = Math.max(0, 1 - 1/util);
   /* burst loss only bites as you approach capacity, and shrinks as the buffer grows */
-  const burst = 0.020 * Math.min(1.6, Math.max(0, util-0.75))
+  /* burstiness scales it, spike decides how far the peak overshoots capacity,
+     and bufPreset is the only thing that answers either. `sustained` above reads
+     none of the three — that separation IS invariant 1.3. */
+  const burst = 0.020 * (P.load.burstiness / BURST_REF)
+                     * Math.min(1.6, Math.max(0, util*P.load.spike - 0.75))
                      / Math.pow(2, (t.bufPreset-1)*0.42);
 
   return {inflow, cap, util, sustained, burst, dropP:Math.min(0.92, sustained+burst),
@@ -269,17 +410,19 @@ function noise(){
   const alive = !S.dead && working('rules') && working('outputs');
   /* with no kernel path nothing syscall-derived arrives at all, so the only
      alerts in the queue are the ones the plugin sources bring (INVARIANTS 3.10) */
-  const base    = hasCap('kernelPath') ? SOC.perNode * Math.max(0, S.nodes) * S.load : 0;
-  const breadth = base * (SET_MUL[S.tune.syscallSet] - 1);        // the SRE's lever
+  const P = profile();
+  const base    = hasCap('kernelPath')
+    ? SOC.perNode * P.alerts.perNodeMul * Math.max(0, S.nodes) * S.load * P.load.base : 0;
+  const breadth = base * (SET_MUL[S.tune.syscallSet] - 1) * P.alerts.breadth;  // the SRE's lever
   const set     = base + breadth;
   const ruleset = set * (working('falcoctl') ? SOC.follow - 1 : 0)
-                + (working('plugins') ? SOC.plugin : 0);          // the detect lever
+                + (working('plugins') ? SOC.plugin * P.alerts.plugin : 0);  // the detect lever
   /* an overloaded node is a quieter node: what the ring buffer ate never rings */
   const survive = 1 - M.dropP;
   const inflow  = alive ? Math.max(0, (set + ruleset) * survive) : 0;
 
   const corr = S.mode === 'sysdig' && working('sysdig');
-  const cap  = SOC.cap * (corr ? SOC.sysdig : 1);
+  const cap  = SOC.cap * P.alerts.triage * (corr ? SOC.sysdig : 1);
   const util = inflow / cap;
   const buriedP = Math.max(0, 1 - 1/util);
 
@@ -310,5 +453,12 @@ export {
   unmetOf,
   working,
   model,
-  noise
+  noise,
+  PROFILE_DEFAULTS,
+  BURST_REF,
+  profileErrors,
+  setProfile,
+  setStage,
+  profile,
+  resetProfile
 };
