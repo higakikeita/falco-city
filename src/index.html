@@ -86,6 +86,16 @@ canvas{display:block}
 .cmp-hint{flex:none;font-size:11.5px;line-height:1.65;color:var(--grey-50);
   background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:9px 0}
 .cmp-hint.good{background:rgba(189,247,139,.3);color:var(--grey-60)}
+/* Shown only where localStorage refuses (private mode, file://, full quota).
+   ui.js hides it otherwise, so in the normal case this costs the column zero
+   height — which matters, because at 1280x720 there is none to give. It is a
+   notice and not an error: save.js keeps the progress in memory, so everything
+   still works, it just does not outlive the tab. */
+.cmp-save{flex:none;font-size:10.5px;line-height:1.6;color:var(--grey-50);
+  background:rgba(255,169,64,.13);border-left:2px solid var(--orange);
+  border-radius:7px;padding:7px 10px;margin:9px 0 0}
+.cmp-save b{color:var(--grey-70);font-weight:600}
+.cmp-save[hidden]{display:none}
 .cmp-hint b{color:var(--black);font-weight:600}
 .cmp-hint code{font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,.05);
   padding:1px 4px;border-radius:3px}
@@ -486,6 +496,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     </div>
     <div class="cmp-sides" id="cmpSides"></div>
     <div class="cmp-roles" id="cmpRoles"></div>
+    <!-- unhidden by ui.js only when save.js reports that localStorage refuses.
+         Progress still works for the rest of the session; it is held in memory. -->
+    <div class="cmp-save" id="cmpSaveNote" hidden>
+      この環境では<b>進行を保存できません</b>（プライベートモードなど）。
+      クリアと解放はこのタブを開いているあいだ有効で、遊ぶことには影響しません。
+    </div>
     <div class="cmp-hint" id="cmpHint">
       いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
     </div>

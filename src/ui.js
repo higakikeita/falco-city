@@ -16,6 +16,9 @@ import {
 } from './campaign.js';
 import { initMenu, plotTag, plotStyle } from './menu.js';
 import { initAudio, setMuted, audioState } from './audio.js';
+/* progress is read here and written in main.js: save.js decides the shape, this
+   file only renders it. Nothing below computes a grade or a ladder itself. */
+import { isCleared, bestFor, unlockedIds, progressSummary, storageOk } from './save.js';
 
 
 /* ============================================================
@@ -252,6 +255,28 @@ function setHint(html, good){
   elHint.scrollTop = 0;
 }
 
+/* ---- storage ------------------------------------------------------------
+   file://, private mode and a full quota all refuse localStorage, and save.js
+   answers that by demoting itself to an in-memory store that behaves the same
+   for the rest of the session. So this is not an error and must not read as
+   one: the game is unaffected, only the *outliving the tab* part is gone. Said
+   once, and only when it is true — which is also why it costs no height in the
+   normal case: the node is hidden, so the panel is the size it always was. */
+const elSaveNote = document.getElementById('cmpSaveNote');
+if(elSaveNote) elSaveNote.hidden = storageOk();
+
+/* the eyebrow already carries who you are, and it has room to spare, so the
+   campaign count goes there rather than into a row of its own — at 1280x720
+   every new line in this column comes out of the build list. */
+function setEyebrow(){
+  if(!elEyebrow) return;
+  const role = GAME.role ? roleById(GAME.role) : null;
+  const p = progressSummary(scenarioOrder());
+  elEyebrow.textContent = ['mission', role ? role.chip : '',
+                           p.total ? `${p.cleared}/${p.total} クリア` : '']
+                          .filter(Boolean).join(' · ');
+}
+
 /* ---- a lever you do not own is visible but untouchable ---- */
 function applyRoleLocks(){
   for(const [group, sel] of Object.entries(LEVER_NODE)){
@@ -277,16 +302,42 @@ Object.assign(elScen.style, {
 });
 elScen.onchange = ()=> startScenario(elScen.value);
 
+/* the ordered id list save.js takes as an argument, so it can stay import-free */
+const scenarioOrder = () => SCENARIOS.map(s => s.id);
+
+/* one option's label: cleared gets a tick and the best run's numbers, locked
+   says so in words rather than only being grey — "why can I not pick this" is
+   the actual question, and a <select> has no room for a tooltip. */
+function scenarioLabel(s, open){
+  const b = bestFor(s.id);
+  return (isCleared(s.id) ? '✓ ' : '')
+       + s.title
+       + (b ? `  (${b.detect}/${b.of}・依頼${b.asks}・${b.attempts}回目)` : '')
+       + (open ? '' : '  — 未解放');
+}
+
 function renderScenarioPicker(){
   const cur = activeScenario();
+  const order = scenarioOrder();
+  /* the ladder: first is always open, clearing one opens the next, cleared
+     stays open. save.js owns that rule; this only asks. */
+  const open = unlockedIds(order);
   elScen.innerHTML = '';
   SCENARIOS.forEach(s=>{
     const o = document.createElement('option');
-    o.value = s.id; o.textContent = s.title;
+    const unlocked = open.includes(s.id) || !!(cur && cur.id === s.id);
+    o.value = s.id;
+    o.textContent = scenarioLabel(s, unlocked);
+    o.disabled = !unlocked;
     if(cur && cur.id === s.id) o.selected = true;
     elScen.appendChild(o);
   });
   elScen.disabled = SCENARIOS.length < 2;
+  /* the closed select is 150px of a full column, so the whole label — which is
+     wider than that — is also on the hover */
+  const p = progressSummary(order);
+  elScen.title = (cur ? scenarioLabel(cur, true) + '\n' : '')
+               + `${p.total} 本中 ${p.cleared} 本クリア（選べるのは ${p.unlocked} 本）`;
 }
 
 /* ---- levers: reflect what the scenario handed over, and what it forbids ----
@@ -438,6 +489,55 @@ function keepActionableVisible(){
   else if(r.top < view.top)   elBuild.scrollTop -= view.top - r.top + 4;
 }
 
+/* ---- your own best run -----------------------------------------------------
+   main.js writes the clear, on the same 'reveal' event this file renders. It
+   subscribed to the feed after us, so at render time bestFor() still holds the
+   PREVIOUS best — which is exactly the number "new best" is measured against.
+   So: snapshot it, then read again one turn later, once the write has happened.
+   The difference is the answer, and nothing here reimplements save.js's ranking
+   (detections, then asks, then drops, then attempts) — a second copy of that
+   order would drift from the one that decides what is stored.
+   If the order of the two listeners ever flips, both reads return the new best
+   and the panel says 自己ベスト instead of 自己ベスト更新. Wrong word, right
+   numbers: it degrades, it does not lie about the grade. */
+let bestNote = null;      // { id, best, first, improved }
+
+const sameGrade = (a, b) => a.detect === b.detect && a.asks === b.asks
+                         && a.dropPct === b.dropPct && a.attempts === b.attempts;
+
+function captureBest(){
+  bestNote = null;
+  const sc = activeScenario(), st = goalStatus();
+  if(!sc || !st || !st.cleared) return;
+  const id = sc.id, prev = bestFor(id);
+  setTimeout(()=>{
+    const now = bestFor(id);
+    if(!now) return;         /* the clear was not recorded — say nothing */
+    bestNote = { id, best:now, first:!prev,
+                 improved:!prev || !sameGrade(prev, now) };
+    const cur = activeScenario();
+    if(!cur || cur.id !== id) return;
+    /* clearing this one may have opened the next, so the picker is stale too */
+    renderScenarioPicker();
+    setEyebrow();
+    renderResults();
+  }, 0);
+}
+
+/* At 1280x720 the results scroller is 78px tall and holds ~1000px, and it is
+   pinned to the bottom to follow the reveal — so a line appended to the report
+   is a line the player has to go looking for. The grade is the one thing they
+   came back for, so it is ALSO stated in the hint, which has a fixed place near
+   the top of the panel and is already where the verdict lands. */
+function bestLine(){
+  if(!bestNote) return '';
+  const b = bestNote.best;
+  const head = bestNote.first ? '初クリア'
+             : bestNote.improved ? '自己ベスト更新' : '自己ベスト';
+  return `<br><b>${head}</b> — 検知 ${b.detect}/${b.of} · 依頼 ${b.asks}件`
+       + ` · ${b.attempts}回目`;
+}
+
 /* ---- did you clear it, and the one misdiagnosis this scenario is about ---- */
 function renderScenarioReport(){
   const sc = activeScenario();
@@ -455,6 +555,31 @@ function renderScenarioReport(){
                     `<span class="rv">${GOAL_LBL[i.key] ? GOAL_LBL[i.key](i) : i.key}</span>`;
     wrap.appendChild(row);
   });
+  /* the grade that survives the tab closing, and what it just opened */
+  if(bestNote && bestNote.id === sc.id){
+    const b = bestNote.best;
+    const row = document.createElement('div');
+    row.className = 'rrow ' + (bestNote.improved ? 'clean' : '');
+    row.style.borderLeftColor = bestNote.improved ? 'var(--lumin)' : 'var(--grey-20)';
+    row.innerHTML =
+      `<span class="rn">${bestNote.first ? '初クリア'
+                        : bestNote.improved ? '自己ベスト更新' : '自己ベスト'}</span>`+
+      `<span class="rv">検知 ${b.detect}/${b.of} · 依頼 ${b.asks}件 · ${b.attempts}回目`+
+      `${b.clears > 1 ? ` · ${b.clears}回クリア` : ''}</span>`;
+    wrap.appendChild(row);
+
+    const p = progressSummary(scenarioOrder());
+    const nx = p.next ? SCENARIOS.find(s => s.id === p.next) : null;
+    const prog = document.createElement('div');
+    prog.className = 'rnote';
+    prog.innerHTML = `<b>進行:</b> ${p.total} 本中 ${p.cleared} 本クリア。`
+      + (p.complete ? '全シナリオ制覇。'
+         : nx ? `次は「${nx.title}」が選べます。` : '')
+      + (storageOk() ? ''
+         : '<br>この環境では保存できないので、この記録はタブを閉じるまでです。');
+    wrap.appendChild(prog);
+  }
+
   const ins = document.createElement('div');
   ins.className = 'rnote';
   ins.innerHTML = `<b>踏みがちな読み:</b> ${sc.insight.wrong}<br><b>実際は:</b> ${sc.insight.truth}`;
@@ -512,7 +637,7 @@ function renderResults(){
   const done = GAME.reveal >= GAME.results.length;
   if(done){
     const v = verdictText();
-    if(v) setHint(v.html, v.good);
+    if(v) setHint(v.html + bestLine(), v.good);
     renderScenarioReport();
     renderRoleReport();
   }
@@ -545,11 +670,10 @@ function showScenario(){
      containment is a separate component, and stage 08 exists to say so */
   if(elScoreOf) elScoreOf.textContent = `/ ${activeChain().length} 検知`;
   elRun.disabled = false;
-  /* who you are goes in the eyebrow, which costs no height. The hint is for the
-     setup only — at 720p every line of prose here is a line the build list or
-     the results give up. */
-  const role = GAME.role ? roleById(GAME.role) : null;
-  if(elEyebrow) elEyebrow.textContent = role ? `mission · ${role.chip}` : 'mission';
+  /* who you are, and how far the campaign is, go in the eyebrow, which costs no
+     height. The hint is for the setup only — at 720p every line of prose here is
+     a line the build list or the results give up. */
+  setEyebrow();
   setHint(sc ? sc.blurb : '', false);
   renderCampaignAll();
   fitCampaignPanel();
@@ -558,6 +682,7 @@ function showScenario(){
 onCampaignChange(ev=>{
   switch(ev.type){
     case 'mode':
+      bestNote = null;
       elCmp.classList.toggle('on', GAME.on);
       [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
         b.classList.toggle('on', b.dataset.ui === ev.mode));
@@ -571,6 +696,7 @@ onCampaignChange(ev=>{
       goHome();
       break;
     case 'scenario':
+      bestNote = null;
       resetHudBaseline();
       showScenario();
       closeDrawer();
@@ -579,7 +705,7 @@ onCampaignChange(ev=>{
     case 'role': {
       const r = ev.id ? roleById(ev.id) : null;
       const sc = activeScenario();
-      if(elEyebrow) elEyebrow.textContent = r ? `mission · ${r.chip}` : 'mission';
+      setEyebrow();
       setHint(r ? `<b>${r.jp}</b>として参加する。${r.brief}`
                 : (sc ? sc.blurb : ''), false);
       renderSides(); renderRoles(); renderBuildList(); applyRoleLocks();
@@ -600,7 +726,12 @@ onCampaignChange(ev=>{
       renderRoles();
       break;
     case 'run':
+      /* a new attempt: last run's verdict on the best is no longer this run's */
+      bestNote = null;
+      renderResults();
+      break;
     case 'reveal':
+      if(ev.done) captureBest();
       renderResults();
       break;
   }
