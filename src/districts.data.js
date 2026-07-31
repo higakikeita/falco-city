@@ -256,6 +256,63 @@ const CLUSTER_NODES = nodeCount(byTopologyId('cluster'));
 
 
 /* ============================================================
+   1a-1b. CPUs on ONE node, and the buffer count that follows
+   ------------------------------------------------------------
+   INVARIANTS 3.6: the ring buffer count is
+
+       ceil(nCPU / cpus_for_each_buffer)          modern_ebpf, default 2
+
+   and nCPU is a property of one node. Adding nodes adds DaemonSet pods; the
+   node that is overflowing gets no new buffer out of it.
+
+   This used to be the literal 8 in two places — the ring district's lane loop
+   and the TUNING label, which therefore always read "2 → 4 buffers" no matter
+   what node you were standing on. That is a units error the model was
+   teaching, and it directly contradicts the nodes-are-not-buffers scenario,
+   whose whole diagnosis is that the new 2-vCPU nodes get ceil(2/2) = 1 buffer
+   where the old 8-vCPU nodes had ceil(8/2) = 4.
+
+   So the count is declared once, here, and everything derives from it:
+
+     CPU_MAX          how many lanes the ring district builds. The ceiling, not
+                      the count — lanes above the current count are hidden
+     NODE_CPUS        what one node has when nothing says otherwise. 8, because
+                      that is what the district was drawn for and what the
+                      README's measurements were taken against
+     nodeCpus()       the current count. THE swap point: when the scenario
+                      schema grows a per-environment CPU count (L1 is adding
+                      it), setNodeCpus() is what the environment layer calls
+                      and nothing else in the model has to change
+     bufferCount()    ceil(cpus / cpusPerBuf). Used by the label AND by the
+                      geometry, so the two cannot disagree
+
+   `?cpus=N` overrides it the same way `?nodes=N` overrides the node count, so
+   the derivation is checkable at 1 / 2 / 4 / 8 before the attribute lands.
+   ============================================================ */
+const CPU_MAX = 8;
+const NODE_CPUS = 8;
+
+const cpuOverride = (() => {
+  if(typeof location === 'undefined') return null;
+  const n = Number(new URLSearchParams(location.search).get('cpus'));
+  return Number.isInteger(n) && n >= 1 ? Math.min(n, CPU_MAX) : null;
+})();
+
+let _cpus = cpuOverride ?? NODE_CPUS;
+const nodeCpus = () => _cpus;
+/* The environment layer's single entry point. Returns the count actually in
+   force, so a caller can tell when it asked for more than the district can
+   draw. An explicit `?cpus=` on the URL wins, because it is a debug override. */
+function setNodeCpus(n){
+  if(cpuOverride == null && Number.isInteger(n) && n >= 1) _cpus = Math.min(n, CPU_MAX);
+  return _cpus;
+}
+/* the one formula. cpus defaults to the current node so callers cannot forget */
+const bufferCount = (cpusPerBuf, cpus = nodeCpus()) =>
+  Math.max(1, Math.ceil(cpus / Math.max(1, cpusPerBuf)));
+
+
+/* ============================================================
    1a-2. the axes as levers, and the composition
    ------------------------------------------------------------
    ENV_AXES is what controls.js renders. ENV_SEL is what is selected. Both
@@ -688,6 +745,11 @@ export {
   byTopologyId,
   nodeCount,
   CLUSTER_NODES,
+  CPU_MAX,
+  NODE_CPUS,
+  nodeCpus,
+  setNodeCpus,
+  bufferCount,
   MAX_NODES,
   NODE_MAX,
   NODE_PITCH,

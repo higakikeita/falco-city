@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, isFlow } from './layout.js';
 import { ORCH, TOPOLOGIES, DRIVERS, currentEnv, nodeCount, nodeOffsets,
-         CLUSTER_NODES, NODE_PAD_W, NODE_PAD_D, POD_PITCH } from './districts.data.js';
+         CLUSTER_NODES, CPU_MAX, nodeCpus,
+         NODE_PAD_W, NODE_PAD_D, POD_PITCH } from './districts.data.js';
 import { edgeMat, box, edged, put, chevron, groundText } from './mesh.js';
 import { world } from './scene.js';
 
@@ -19,7 +20,10 @@ const RULE_BLOCKS = [];
 const OUT_PIPES   = [];
 let sysdigGroup = null;
 /* pieces the tuning panel reshapes at runtime */
-const ringRefs  = { shm:null, troughs:[], walls:[], caps:[] };
+/* the ring district's pieces. `troughs`/`walls`/`caps`/`laneLabels` are one per
+   POSSIBLE CPU (CPU_MAX of them); applyCpus() shows the ones this node has. */
+const ringRefs  = { shm:null, troughs:[], walls:[], caps:[], laneLabels:[],
+                    pitch:0, group:null, cpuCaption:null, captionAt:null };
 const outRefs   = { pipes:[] };
 /* three enrichment gantries, and the field lists each one can attach.
    `labels` holds the alternative captions applyEnvironment switches between. */
@@ -207,24 +211,34 @@ function BUILD_driver(g,d,cx,cz){
 }
 
 function BUILD_ring(g,d,cx,cz){
-  // per-cpu lanes = troughs
+  /* One lane per CPU, built up to CPU_MAX and then centred on however many the
+     node actually has (applyCpus below). The pitch is fixed rather than
+     span-divided precisely so that a 2-vCPU node draws two lanes at the same
+     spacing as an 8-vCPU node draws eight, instead of two lanes stretched to
+     the district's full depth — the lanes are CPUs, and a CPU is not wider on
+     a smaller machine. */
   RING_LANES.length = 0;
-  ringRefs.troughs.length = 0; ringRefs.walls.length = 0; ringRefs.caps.length = 0;
-  const laneSpan = d.d*0.74;
-  for(let i=0;i<8;i++){
-    const z = -laneSpan/2 + i*(laneSpan/7);
-    RING_LANES.push(z);
+  ringRefs.troughs.length = 0; ringRefs.walls.length = 0;
+  ringRefs.caps.length = 0;   ringRefs.laneLabels.length = 0;
+  ringRefs.pitch = (d.d*0.74) / (CPU_MAX - 1);
+  for(let i=0;i<CPU_MAX;i++){
     const trough = box(d.x1-d.x0-1, 0.55, 2.5, C.g10, 0.95);
-    put(trough, cx, 0.3, z); g.add(trough);
+    put(trough, cx, 0.3, 0); g.add(trough);
     ringRefs.troughs.push(trough);
     // lane wall — its height tracks buf_size_preset
     const wl = box(d.x1-d.x0-1, 1.5, 0.22, C.g20, 0.34);
-    put(wl, cx, 0.9, z+1.42); g.add(wl);
+    put(wl, cx, 0.9, 0); g.add(wl);
     ringRefs.walls.push(wl);
     // cpu plate
     const cap = box(1.5, 1.4, 2.5, C.g30, 0.9);
-    put(cap, d.x0+0.4, 0.85, z); g.add(cap);
+    put(cap, d.x0+0.4, 0.85, 0); g.add(cap);
     ringRefs.caps.push(cap);
+    /* cpu index plate at the head of the lane. One per possible CPU, so the
+       labels stay truthful when the count changes — cpu0..cpu1 on a 2-vCPU
+       node, not cpu0..cpu7 with six of them hidden behind nothing. */
+    const lbl = groundText('cpu'+i, d.x0-5.6, 0, 1.9,
+      {color:'#8A8C8E', mono:true, opacity:0.95});
+    g.add(lbl); ringRefs.laneLabels.push(lbl);
   }
   // shared-memory volume — scales with buf_size_preset
   const shm = edged(d.x1-d.x0+1, 7.4, d.z1-d.z0-1, 0x9FB4BC, 0.14, C.g30);
@@ -238,16 +252,58 @@ function BUILD_ring(g,d,cx,cz){
   pit.rotation.x = -Math.PI/2; pit.position.set(cx, 0.06, d.z1+4.5); g.add(pit);
   g.add(groundText('n_drops', cx+3, d.z1+4.4, 2.4, {color:'#EA5255', mono:true, opacity:0.95}));
   g.add(groundText('BUFFERS', cx-4, d.z1+11, 5.0, {color:'#BBBDBF', opacity:0.4}));
-  /* NOT "8 MiB / CPU": 8 MiB is one buffer, and the default modern_ebpf
-     shares each buffer between two CPUs — ceil(nCPU / cpus_for_each_buffer) */
-  g.add(groundText('1 buffer = 8 MiB (preset 4) · ceil(nCPU ÷ 2) buffers · timestamp-ordered read',
-    d.x0, d.z0-6, 2.0, {color:'#A3A5A7', mono:true, opacity:0.9}));
-  /* cpu index plates at the head of each lane — the lanes are CPUs, and the
-     buffer they share is shown by the trough colour (see applyTuneVisuals) */
-  RING_LANES.forEach((z,i)=>{
-    g.add(groundText('cpu'+i, d.x0-5.6, z, 1.9,
-      {color:'#8A8C8E', mono:true, opacity:0.95}));
-  });
+  /* NOT "8 MiB / CPU", and no literal divisor either: 8 MiB is ONE buffer, and
+     the count is ceil(nCPU / cpus_for_each_buffer) — both of which move. */
+  g.add(groundText('1 buffer = buf_size_preset · ceil(nCPU ÷ cpus_for_each_buffer) buffers · timestamp-ordered read',
+    d.x0, d.z0-6, 1.85, {color:'#A3A5A7', mono:true, opacity:0.9}));
+  /* the count this node actually has, spelled out where the lanes are. Rebuilt
+     rather than repositioned, because the text itself changes. */
+  ringRefs.cpuCaption = null;
+  ringRefs.captionAt = [cx-6, d.z0-9.4];
+  ringRefs.group = g;
+  applyCpus();
+}
+
+/* ---------- how many CPUs this node has ----------
+   Shows exactly nodeCpus() lanes, centred, and rewrites RING_LANES in place so
+   sim.js keeps drawing particles into lanes that exist. Called on every tuning
+   change and whenever the environment moves, so the district can never be
+   showing a different machine from the one the HUD is describing. */
+let lastCpus = -1;
+function applyCpus(){
+  const n = nodeCpus();
+  if(n === lastCpus) return;        // called on every slider tick; do no work
+  lastCpus = n;
+  const pitch = ringRefs.pitch || 0;
+  RING_LANES.length = 0;
+  for(let i=0;i<ringRefs.troughs.length;i++){
+    const on = i < n;
+    const z = (i - (n-1)/2) * pitch;
+    ringRefs.troughs[i].visible = on;
+    ringRefs.walls[i].visible   = on;
+    ringRefs.caps[i].visible    = on;
+    ringRefs.laneLabels[i].visible = on;
+    if(!on) continue;
+    RING_LANES.push(z);
+    ringRefs.troughs[i].position.z = z;
+    ringRefs.walls[i].position.z   = z + 1.42;
+    ringRefs.caps[i].position.z    = z;
+    ringRefs.laneLabels[i].position.z = z;
+  }
+  /* say the count out loud: this is the number the scenario's diagnosis turns
+     on, and "2 vCPU" is not something you can read off eight troughs */
+  const g = ringRefs.group;
+  if(g && ringRefs.captionAt){
+    if(ringRefs.cpuCaption){
+      g.remove(ringRefs.cpuCaption);
+      ringRefs.cpuCaption.material.map?.dispose();
+      ringRefs.cpuCaption.material.dispose();
+      ringRefs.cpuCaption.geometry.dispose();
+    }
+    const t = groundText(`this node: ${n} vCPU`, ringRefs.captionAt[0], ringRefs.captionAt[1],
+      2.2, {color:'#00A8BC', mono:true, opacity:0.95});
+    g.add(t); ringRefs.cpuCaption = t;
+  }
 }
 
 function BUILD_state(g,d,cx,cz){
@@ -608,6 +664,7 @@ const BUILDERS = {
 export {
   BUILDERS,
   applyEnvironment,
+  applyCpus,
   topoVariants,
   captionRefs,
   driverSlabs,
