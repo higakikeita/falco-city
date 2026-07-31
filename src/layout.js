@@ -49,8 +49,15 @@ function layout(){
     d.y  = d.y || 0;
     d.cx = (d.x0 + d.x1)/2;
     d.cz = (d.z0 + d.z1)/2;
-    /* a serviceable 3/4 view of this district, if none was hand-picked */
-    if(!d.cam) d.cam = [d.cx - d.w*0.9, d.y + d.top + 26, d.cz + d.d*1.15 + 26];
+    /* A serviceable 3/4 view of this district, if none was hand-picked.
+       Flow districts are approached from the south, because nothing stands
+       between them and the viewer. Off-flow lanes cannot be: the flow band is
+       in the way, and it gets deeper as the node count goes up. So they are
+       approached from the west instead, which stays clear at any node count
+       and needs no hand-tuned coordinate to follow the layout. */
+    if(!d.cam) d.cam = isFlow(d)
+      ? [d.cx - d.w*0.9,          d.y + d.top + 26, d.cz + d.d*1.15 + 26]
+      : [d.x0 - d.w*0.75 - 18,    d.y + d.top + 30, d.cz + d.d*0.9];
   }
 }
 layout();

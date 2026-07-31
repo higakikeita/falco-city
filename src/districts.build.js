@@ -2,8 +2,8 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, isFlow } from './layout.js';
-import { DEPLOYMENTS, byDeployId, nodeCount, nodeOffsets,
-         NODE_PAD_W, NODE_PAD_D, POD_PITCH } from './districts.data.js';
+import { ORCH, TOPOLOGIES, DRIVERS, currentEnv, nodeCount, nodeOffsets,
+         CLUSTER_NODES, NODE_PAD_W, NODE_PAD_D, POD_PITCH } from './districts.data.js';
 import { edgeMat, box, edged, put, chevron, groundText } from './mesh.js';
 import { world } from './scene.js';
 
@@ -21,17 +21,23 @@ let sysdigGroup = null;
 /* pieces the tuning panel reshapes at runtime */
 const ringRefs  = { shm:null, troughs:[], walls:[], caps:[] };
 const outRefs   = { pipes:[] };
-const stateRefs  = { gantries:{} };
-/* west-end variants + the Sysdig Shield overlay, toggled by deploy / mode */
-const deployRefs = { wlK8s:null, wlHost:null, apiServer:null, clusterShield:null, hostShield:null };
-/* deployment id -> west-end group (null when that topology draws none) */
-const deployVariants = {};
+/* three enrichment gantries, and the field lists each one can attach.
+   `labels` holds the alternative captions applyEnvironment switches between. */
+const stateRefs  = { gantries:{}, labels:{} };
+/* the Sysdig Shield overlay, toggled by stack / environment */
+const deployRefs = { clusterShield:null, hostShield:null, auditRoutes:{} };
+/* topology id -> west-end group (null when that topology draws none) */
+const topoVariants = {};
+/* orchestrator id -> the ground caption under the west end */
+const captionRefs = {};
 
-/* ---------- west-end variants, one per declared deployment ----------
+/* ---------- west-end variants, one per declared topology ----------
    A cluster and a single host are not the same picture, so the west end is
-   rebuilt rather than relabelled. Both shapes below read their node count,
-   pod count and process list from DEPLOYMENTS — nothing here knows the
-   number three. */
+   rebuilt rather than relabelled. There are three shapes and forty-odd
+   environments, because geometry only depends on the projection: is there a
+   kernel path, and is it a cluster. Both shapes below read their node count,
+   pod count and process list from TOPOLOGIES — nothing here knows the
+   number three, and nothing here knows an environment id. */
 
 /* a cluster: N node pads, pods on each, one agent per node */
 function buildNodesVariant(dep, d, cx, cz){
@@ -61,7 +67,7 @@ function buildNodesVariant(dep, d, cx, cz){
       {color:'#8A8C8E', mono:true, opacity:0.95, y:0.12}));
   });
 
-  if(dep.cluster){
+  if(dep.boundary){
     /* the boundary grows with the district, so more nodes stay enclosed */
     const cw = NODE_PAD_W + 6, cd = d.d + 4;
     const cb = new THREE.Mesh(
@@ -72,8 +78,6 @@ function buildNodesVariant(dep, d, cx, cz){
       new THREE.EdgesGeometry(new THREE.PlaneGeometry(cw, cd)), edgeMat(C.falco, 0.5));
     cbl.rotation.x = -Math.PI/2; cbl.position.set(cx, 0.03, cz); grp.add(cbl);
   }
-  grp.add(groundText(dep.caption(n8), cx-14, d.z1+4, 2.0,
-    {color:'#00A8BC', mono:true, opacity:0.95}));
   return grp;
 }
 
@@ -102,41 +106,83 @@ function buildMachineVariant(dep, d, cx, cz){
 
   const svc = edged(4.4, 4.4, 4.4, C.falco, 0.92);
   put(svc, cx+11.4, 1.4+2.2, cz); grp.add(svc);
-  grp.add(groundText(dep.caption(nodeCount(dep)), cx-13, d.z1+4, 2.0,
-    {color:'#00A8BC', mono:true, opacity:0.95}));
   return grp;
 }
 
 const SHAPES = { nodes:buildNodesVariant, machine:buildMachineVariant };
 
 function BUILD_workloads(g,d,cx,cz){
-  for(const dep of DEPLOYMENTS){
-    const make = SHAPES[dep.shape];
-    /* shape:'none' is a real answer — kernel-less has no syscall-emitting
-       west end to draw, so the district is left bare and dimmed */
-    const v = make ? make(dep, d, cx, cz) : null;
+  for(const topo of TOPOLOGIES){
+    const make = SHAPES[topo.shape];
+    /* shape:'none' is a real answer — with no driver there is no
+       syscall-emitting west end to draw, so the district is left bare */
+    const v = make ? make(topo, d, cx, cz) : null;
     if(v){ v.visible = false; g.add(v); }
-    deployVariants[dep.id] = v;
+    topoVariants[topo.id] = v;
   }
-  /* Named handles kept for controls.js, which still toggles these two by name.
-     applyDeployment() below is the general replacement; moving the switch onto
-     it touches a shared file, so it is a separate PM-sequenced step. */
-  deployRefs.wlK8s  = deployVariants.k8s;
-  deployRefs.wlHost = deployVariants.host;
+
+  /* The caption belongs to the orchestrator, not to the geometry: EKS and
+     self-managed draw the same pads and say different things about them. One
+     per declared orchestrator, plus the one for having no driver at all. */
+  const cap = (txt, key)=>{
+    const t = groundText(txt, cx-16, d.z1+4, 2.0,
+      {color:'#00A8BC', mono:true, opacity:0.95});
+    t.visible = false; g.add(t); captionRefs[key] = t;
+  };
+  for(const o of ORCH) cap(o.caption(CLUSTER_NODES), o.id);
+  cap('NO DRIVER (nodriver) · プラグイン入力だけがイベントを運ぶ', 'bare');
 
   g.add(groundText('SYSCALLS', cx-1, d.z1+8, 5.0, {color:'#BBBDBF', opacity:0.4}));
   g.add(groundText('kernel boundary →', d.x1+3, d.z0-5, 2.6,
     {color:'#A3A5A7', mono:true, opacity:0.9}));
 }
 
-/* Show exactly the west end a deployment declares. Works for any number of
-   declared topologies, including ones with no button yet. */
-function applyDeployment(id){
-  const dep = byDeployId(id);
-  for(const k in deployVariants)
-    if(deployVariants[k]) deployVariants[k].visible = k === id;
-  if(deployRefs.apiServer) deployRefs.apiServer.visible = !!dep?.apiServer;
-  return dep;
+/* ---------- the one geometric switch ----------
+   Everything the composed environment changes about the city, in one place.
+   It takes the environment, not an id, and it never asks which environment
+   this is — only what is true of it. Adding an axis value cannot reach this
+   function unless it declares a consequence, which is the point. */
+function applyEnvironment(env = currentEnv()){
+  /* the west end: cluster pads, one host slab, or nothing */
+  for(const k in topoVariants)
+    if(topoVariants[k]) topoVariants[k].visible = k === env.topology;
+
+  /* its caption: the orchestrator's, unless there is no driver to caption */
+  const capKey = env.kernelPath ? env.orch.id : 'bare';
+  for(const k in captionRefs) captionRefs[k].visible = k === capKey;
+
+  /* the audit route: an apiserver plus however that provider is collected.
+     No orchestrator means no audit log to collect, and therefore no route. */
+  for(const k in deployRefs.auditRoutes)
+    deployRefs.auditRoutes[k].visible = !!env.audit && k === env.orch.id;
+
+  /* the two k8s gantries are separate questions, so they get separate
+     captions: runtime-derived fields need the socket, API-derived fields need
+     the k8smeta plugin, and the deprecated spellings read <NA> without it */
+  const L = stateRefs.labels;
+  if(L.container){
+    /* two fields is the floor: container.id and container.type come off the
+       cgroup, so they survive with no socket at all */
+    const rich = env.containerFields.length > 2;
+    L.container.full.visible = rich;
+    L.container.min.visible  = !rich;
+  }
+  if(L.k8sRuntime){
+    L.k8sRuntime.on.visible  = env.podFields.length > 0;
+    L.k8sRuntime.off.visible = env.podFields.length === 0;
+  }
+  if(L.k8sApi){
+    L.k8sApi.on.visible  = env.k8sMeta;
+    L.k8sApi.off.visible = !env.k8sMeta;
+  }
+
+  /* a driver the node OS cannot load is drawn as a slab you cannot stand on */
+  for(const s of driverSlabs){
+    const blocked = env.blockedDrivers.includes(s.userData.drvName);
+    s.userData.blocked = blocked;
+    s.visible = !blocked;
+  }
+  return env;
 }
 
 function BUILD_driver(g,d,cx,cz){
@@ -148,13 +194,13 @@ function BUILD_driver(g,d,cx,cz){
     const p = box(1.5,h,1.5, C.falco, 0.85);
     put(p, cx-3.2, h/2, z); g.add(p);
   }
-  // three driver slabs (selectable)
-  const names = ['modern_ebpf','ebpf','kmod'];
+  /* one selectable slab per driver that actually injects something. nodriver
+     has no slab on purpose — it is the absence of one. */
   driverSlabs.length = 0;
-  names.forEach((nm,i)=>{
+  DRIVERS.filter(dv => dv.slab).forEach((dv,i)=>{
     const slab = edged(7.6, 1.5, 8.2, C.g20, 0.75);
     put(slab, cx-1, 1.1 + i*4.4, d.z0-6.5 - i*0.2);
-    slab.userData.drvName = nm;
+    slab.userData.drvName = dv.id;
     g.add(slab); driverSlabs.push(slab);
   });
   g.add(groundText('DRIVER', cx-5, d.z1+8, 5.0, {color:'#7FD9E6', opacity:0.5}));
@@ -191,10 +237,13 @@ function BUILD_ring(g,d,cx,cz){
   );
   pit.rotation.x = -Math.PI/2; pit.position.set(cx, 0.06, d.z1+4.5); g.add(pit);
   g.add(groundText('n_drops', cx+3, d.z1+4.4, 2.4, {color:'#EA5255', mono:true, opacity:0.95}));
-  g.add(groundText('PER-CPU', cx-4, d.z1+11, 5.0, {color:'#BBBDBF', opacity:0.4}));
-  g.add(groundText('8 MiB / CPU · timestamp-ordered read', d.x0, d.z0-6, 2.3,
-    {color:'#A3A5A7', mono:true, opacity:0.9}));
-  /* cpu index plates at the head of each lane */
+  g.add(groundText('BUFFERS', cx-4, d.z1+11, 5.0, {color:'#BBBDBF', opacity:0.4}));
+  /* NOT "8 MiB / CPU": 8 MiB is one buffer, and the default modern_ebpf
+     shares each buffer between two CPUs — ceil(nCPU / cpus_for_each_buffer) */
+  g.add(groundText('1 buffer = 8 MiB (preset 4) · ceil(nCPU ÷ 2) buffers · timestamp-ordered read',
+    d.x0, d.z0-6, 2.0, {color:'#A3A5A7', mono:true, opacity:0.9}));
+  /* cpu index plates at the head of each lane — the lanes are CPUs, and the
+     buffer they share is shown by the trough colour (see applyTuneVisuals) */
   RING_LANES.forEach((z,i)=>{
     g.add(groundText('cpu'+i, d.x0-5.6, z, 1.9,
       {color:'#8A8C8E', mono:true, opacity:0.95}));
@@ -213,17 +262,45 @@ function BUILD_state(g,d,cx,cz){
   // fd table block
   const fd = edged(7, 5, 9, 0x9AD9E8, 0.42);
   put(fd, d.x1-4.2, 2.5, d.z0+6); g.add(fd);
-  // enrichment gantries — container / k8s metadata (k8s one is deploy-dependent)
-  [['container',d.z1-4.5,C.falco],['k8s',d.z1-9.5,C.purple]].forEach(([lbl,z,col],i)=>{
+  /* ---- enrichment gantries: three, because there are three sources ----
+     One reads the container runtime socket for container.*, one reads the
+     same socket for the pod fields, and one reads the API server through the
+     k8smeta plugin. Splitting the second and third is the whole point: they
+     look like one "Kubernetes metadata" feature and they fail separately.
+     Each carries two captions and applyEnvironment picks one. */
+  const GANTRIES = [
+    { key:'container', z:d.z1-4.5,  col:C.falco, h:13,
+      on:'container.* ← socket (約28)',
+      off:'container.id / .type のみ ← cgroup' },
+    { key:'k8sRuntime', z:d.z1-10.5, col:0x00A8BC, h:11,
+      on:'k8s.ns.name · k8s.pod.* ← socket',
+      off:'k8s.pod.* なし (socket 不可)' },
+    { key:'k8sApi', z:d.z1-16.5, col:C.purple, h:9,
+      on:'k8smeta.deployment.name ← apiserver',
+      off:'k8s.deployment.name = <NA>' }
+  ];
+  GANTRIES.forEach(gd=>{
     const gantry = new THREE.Group();
-    const beam = box(d.x1-d.x0-3, 0.8, 1.0, col, 0.8);
-    put(beam, cx, 13, z); gantry.add(beam);
+    const span = d.x1-d.x0-3;
+    const beam = box(span, 0.8, 1.0, gd.col, 0.8);
+    put(beam, cx, gd.h, gd.z); gantry.add(beam);
     [-1,1].forEach(s=>{
-      const leg = box(0.8, 13, 0.8, col, 0.42);
-      put(leg, cx + s*(d.x1-d.x0-3)/2, 6.5, z); gantry.add(leg);
+      const leg = box(0.8, gd.h, 0.8, gd.col, 0.42);
+      put(leg, cx + s*span/2, gd.h/2, gd.z); gantry.add(leg);
     });
     g.add(gantry);
-    stateRefs.gantries[lbl] = gantry;
+    stateRefs.gantries[gd.key] = gantry;
+
+    const mk = txt => {
+      const t = groundText(txt, cx, gd.z+2.2, 1.3,
+        {color:'#8A8C8E', mono:true, opacity:0.92, y:0.14});
+      t.visible = false; g.add(t); return t;
+    };
+    const pair = { on:mk(gd.on), off:mk(gd.off) };
+    /* the container gantry's two states are "everything" and "the two the
+       kernel can answer", so name them for what they are */
+    stateRefs.labels[gd.key] = gd.key === 'container'
+      ? { full:pair.on, min:pair.off } : pair;
   });
   // enclosing volume
   const vol = edged(d.x1-d.x0+1, d.top, d.z1-d.z0+1, 0x9AD9E8, 0.09, C.g30);
@@ -291,11 +368,99 @@ function BUILD_outputs(g,d,cx,cz){
     {color:'#A3A5A7', mono:true, opacity:0.9}));
 }
 
+/* ---------- one audit route per orchestrator ----------
+   The k8saudit lane is where the orchestrator axis is actually visible, and
+   the shapes genuinely differ:
+
+     self-managed  the apiserver pushes over a webhook into the Falco that is
+                   already watching syscalls. No second installation.
+     managed       the apiserver's flags are not yours, so no webhook can be
+                   pointed anywhere. A provider plugin PULLS from the log sink,
+                   and that means a separate installation that collects.
+
+   For EKS the official Helm values pin that installation exactly:
+   controller.kind: deployment / replicas: 1 / driver.enabled: false /
+   collectors.enabled: false — one pod, no driver, no collectors, because two
+   pods would pull the same CloudWatch stream twice and duplicate every alert.
+   GKE says the opposite (Pub/Sub exactly-once lets you run several) and AKS
+   says nothing, so only EKS draws the disabled slots and the "replicas: 1"
+   plate. A model that generalised this would be teaching a false constraint. */
+function buildAuditRoute(orch, d){
+  const a = orch.audit;
+  if(!a) return null;
+  const grp = new THREE.Group();
+  const x = ax => d.x0 + ax, z = az => d.z0 + az;
+
+  /* the apiserver, and the sink or webhook the audit events leave through */
+  const srv = edged(4.2, 9, 4.2, C.falco, 0.6);
+  put(srv, x(16), 0.7+4.5, z(6)); grp.add(srv);
+  grp.add(groundText('kube-apiserver', x(11.4), z(1.4), 1.4,
+    {color:'#00A8BC', mono:true, opacity:0.95, y:0.75}));
+
+  const sink = edged(3.6, a.pull ? 6 : 4, 3.6, 0xF3C99A, 0.7);
+  put(sink, x(16), 0.7+(a.pull?3:2), z(15)); grp.add(sink);
+  grp.add(groundText(a.transport, x(15), z(20), 1.35,
+    {color:'#A3A5A7', mono:true, opacity:0.92, y:0.75}));
+  /* pull points east into the collector, push points west into the DaemonSet */
+  for(let i=0;i<3;i++)
+    grp.add(chevron(x(a.pull ? 19.5+i*2.4 : 12.5-i*2.4), z(15), 1.5,
+      0xF3C99A, 0.45, a.pull ? 0 : Math.PI));
+
+  if(a.controller === 'deployment'){
+    /* a Deployment, drawn as a deck carrying exactly as many pods as the
+       sources permit — one for EKS, several for GKE */
+    const n = a.replicas ?? 1;
+    const dw = 13, dd = 13, dx = x(27), dz = z(11);
+    const deck = box(dw, 1.0, dd, C.g10, 0.95);
+    put(deck, dx, 0.36+0.5, dz); grp.add(deck);
+    const rim = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(dw, 1.0, dd)), edgeMat(C.purple, 0.7));
+    put(rim, dx, 0.36+0.5, dz); grp.add(rim);
+
+    for(let i=0;i<n;i++){
+      const pz = dz + (i - (n-1)/2) * 3.6;
+      const pod = edged(4.4, 5.2, 3.0, C.falco, 0.9);
+      put(pod, dx-1.6, 1.36+2.6, pz); grp.add(pod);
+    }
+    grp.add(groundText(a.lbl, x(20), z(21.8), 1.35,
+      {color:'#B15FC4', mono:true, opacity:0.95, y:0.75}));
+
+    /* the two things this installation explicitly does NOT have, drawn as
+       empty slots so the absence is a building and not a missing label */
+    const off = [];
+    if(a.driver === false)     off.push('driver.enabled: false');
+    if(a.collectors === false) off.push('collectors.enabled: false');
+    off.forEach((lbl,i)=>{
+      const slot = box(3.8, 3.4, 2.6, C.redUi, 0.06);
+      put(slot, dx+3.4, 1.36+1.7, dz - 3.2 + i*4.6); grp.add(slot);
+      const cage = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(3.8, 3.4, 2.6)),
+        edgeMat(C.redUi, 0.55));
+      put(cage, dx+3.4, 1.36+1.7, dz - 3.2 + i*4.6); grp.add(cage);
+      /* the caption goes north of the deck rather than beside the slot: at
+         1280×720 a label on the east edge runs out of the district */
+      grp.add(groundText(lbl, dx+1, z(3.4 + i*2.2), 1.0,
+        {color:'#B23A3D', mono:true, opacity:0.95, y:1.5}));
+    });
+    if(a.single)
+      grp.add(groundText('単一インスタンス必須 — 2つ動かすとアラートが重複する',
+        x(19), z(24.4), 1.4, {color:'#B23A3D', mono:true, opacity:0.95, y:0.75}));
+  } else {
+    /* no separate installation at all: the webhook lands on the Falco that is
+       already there, so the route is a label and an arrow pointing west */
+    grp.add(groundText(a.lbl, x(19), z(9.5), 1.5,
+      {color:'#00A8BC', mono:true, opacity:0.95, y:0.75}));
+    grp.add(groundText('監査用の別インスタンスは要らない', x(19), z(13), 1.4,
+      {color:'#A3A5A7', mono:true, opacity:0.9, y:0.75}));
+  }
+  return grp;
+}
+
 function BUILD_plugins(g,d,cx,cz){
   const plat = box(d.x1-d.x0-1, 0.7, d.z1-d.z0-1, C.g10, 0.85);
   put(plat, cx, 0.36, cz); g.add(plat);
 
-  /* cloud / identity sources — available whatever the deployment is */
+  /* cloud / identity sources — available whatever the environment is */
   ['cloudtrail','okta','github','gcpaudit'].forEach((nm,i)=>{
     const h = 4 + (i%3)*2.2;
     const b = edged(3.4, h, 3.4, 0xF3C99A, 0.62);
@@ -305,22 +470,19 @@ function BUILD_plugins(g,d,cx,cz){
       {color:'#A3A5A7', mono:true, opacity:0.9, y:0.75}));
   });
 
-  /* k8saudit needs an API server, so this half only exists on a cluster */
-  const api = new THREE.Group();
-  const srv = edged(4.2, 9, 4.2, C.falco, 0.6);
-  put(srv, d.x1-4.2, 0.7+4.5, d.z0+5); api.add(srv);
-  const audit = edged(3.4, 5, 3.4, 0xF3C99A, 0.7);
-  put(audit, d.x1-4.2, 0.7+2.5, d.z0+13); api.add(audit);
-  api.add(groundText('kube-apiserver', d.x1-8.4, d.z0+1.2, 1.5,
-    {color:'#00A8BC', mono:true, opacity:0.95, y:0.75}));
-  api.add(groundText('k8saudit', d.x1-6.2, d.z0+16.4, 1.5,
-    {color:'#A3A5A7', mono:true, opacity:0.9, y:0.75}));
-  g.add(api);
-  deployRefs.apiServer = api;
+  /* the k8saudit half, once per declared orchestrator. Adding a provider is a
+     declaration in ORCH; this loop and applyEnvironment need nothing. */
+  for(const orch of ORCH){
+    const route = buildAuditRoute(orch, d);
+    if(!route) continue;
+    route.visible = false;
+    g.add(route);
+    deployRefs.auditRoutes[orch.id] = route;
+  }
 
   g.add(groundText('PLUGINS', cx-1, d.z1+5.5, 4.2, {color:'#E0B183', opacity:0.5}));
-  g.add(groundText('no driver · no ring buffer', cx-8, d.z0-4.5, 2.2,
-    {color:'#A3A5A7', mono:true, opacity:0.9}));
+  g.add(groundText('no driver · no ring buffer · ルールはソース間で相関しない',
+    cx-8, d.z0-4.5, 2.2, {color:'#A3A5A7', mono:true, opacity:0.9}));
 }
 
 function BUILD_falcoctl(g,d,cx,cz){
@@ -412,20 +574,25 @@ function BUILD_sysdig(g,d,cx,cz){
   world.add(hs);
   deployRefs.hostShield = hs;
 
-  /* CLUSTER SHIELD — a Deployment, so exactly one of it, beside the cluster */
+  /* CLUSTER SHIELD — a cluster-scoped Deployment. No source states a replica
+     count, so this draws one deck and says "cluster scoped" rather than "1".
+     It sits just north of the plugin district because that is the lane it
+     works in (admission / audit / posture / vuln mgmt) — inside it would now
+     collide with the audit route the orchestrator axis builds there. */
   const cs = new THREE.Group();
-  const deck = box(15, 1.2, 13, C.deepSee, 0.94);
   const cp = byId('plugins');
-  put(deck, cp.cx+2, 0.6, cp.cz+4); cs.add(deck);
+  const csx = cp.cx, csz = cp.z0 - 9;
+  const deck = box(15, 1.2, 13, C.deepSee, 0.94);
+  put(deck, csx, 0.6, csz); cs.add(deck);
   const rim = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(15,1.2,13)), edgeMat(C.lumin, 0.8));
-  put(rim, cp.cx+2, 0.6, cp.cz+4); cs.add(rim);
+  put(rim, csx, 0.6, csz); cs.add(rim);
   [['admission',-4.6,-3.4,7],['audit',0.6,-3.4,5],
    ['posture',-4.6,3.4,6],['vuln mgmt',0.6,3.4,4.4]].forEach(([lbl,ox,oz,bh])=>{
     const b = box(4.2, bh, 4.6, C.lumin, 0.9);
-    put(b, cp.cx+2+ox, 1.2+bh/2, cp.cz+4+oz); cs.add(b);
+    put(b, csx+ox, 1.2+bh/2, csz+oz); cs.add(b);
   });
-  cs.add(groundText('CLUSTER SHIELD — cluster scoped (Deployment)', cp.cx-9, cp.z1+2.5, 2.1,
+  cs.add(groundText('CLUSTER SHIELD — cluster scoped (Deployment)', csx-11, csz+9.5, 2.1,
     {color:'#01353E', mono:true, opacity:0.9}));
   world.add(cs);
   deployRefs.clusterShield = cs;
@@ -440,8 +607,9 @@ const BUILDERS = {
 
 export {
   BUILDERS,
-  applyDeployment,
-  deployVariants,
+  applyEnvironment,
+  topoVariants,
+  captionRefs,
   driverSlabs,
   RING_LANES,
   RULE_BLOCKS,
