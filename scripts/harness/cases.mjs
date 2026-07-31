@@ -497,10 +497,10 @@ const RULE_MATURITY = {
 };
 /* Steps whose model is known to disagree with the table, with the lane that owns
    the fix. Anything NOT listed here is asserted. Empty is the goal. */
-const MATURITY_PENDING = {
-  cron: 'Write below etc は maturity_sandbox（同梱されない）のに falcoctl を要求していない'
-      + ' — コンテナレーンが step3 ↔ step4 の入れ替えで直す（INVARIANTS 4.3 / 4.4）'
-};
+/* Empty: cron's maturity and its falcoctl requirement agree since PR #33
+   (Write below etc = maturity_sandbox, so it needs 09). Every chain rule's
+   maturity is asserted by the check below rather than waived here. */
+const MATURITY_PENDING = {};
 
 G('ルールの成熟度 (§4)');
 
@@ -987,14 +987,12 @@ function attempt(sc, {build:doBuild = false, move = null} = {}){
 /* Known violations, with the lane that owns the fix. Everything NOT listed here
    is asserted; the gap() below fails as soon as a listed one is fixed, so the
    list can only shrink. */
-const LEVER_PENDING = {
-  'slow-output': 'base_syscalls を絞っても NODE LOAD を下げてもクリアできる（slowOutput は true のまま）。'
-    + '塞ぐのはシナリオ側の宣言で足りる — goal.minPassRatio（絞って逃げるのを拒む）と '
-    + 'goal.lockLoad（負荷は状況であって処置ではない）は schema.js に既にある。BOARD #10',
-  'inherited-all-syscalls': 'NODE LOAD を下げるだけでクリアできる（syscallSet は all のまま）。'
-    + 'util = 流入/消費能力 なので、分子を負荷側から下げても同じところに着く — '
-    + '**この検査が新しく見つけた分**で、#10 と同じ穴。goal.lockLoad で塞がる'
-};
+/* Empty, and it is meant to stay that way: G4 now asserts every registered
+   scenario. Both entries were closed by declaring the locks the schema already
+   had — slow-output got goal.lockLoad + goal.minPassRatio:40 (40% keeps
+   `default` at 42% and refuses custom_set at 17%), inherited-all-syscalls got
+   goal.lockLoad alone because narrowing IS the answer there. BOARD #10 / #36. */
+const LEVER_PENDING = {};
 
 /* every scenario has to be classified, or this check is quietly not running */
 check('シナリオの「正解のレバー」が全部宣言されている', () => {
@@ -1407,35 +1405,6 @@ gap('repair:false に代償が無い（意図的・§2.5）', 'Phase 1', () => {
        + '§2.5 のとおり repair が戻すのは状態エンジンの整合性だけなので、'
        + '検知の枚数として表現するものではない — 現時点では意図的に未採点。'
        + '入れるなら §2.6（プロセスキャッシュの GC 失敗・ログの欠損）として';
-});
-
-gap('意図しないレバーでクリアできるシナリオが残っている（GATE G4）',
-    'コンテンツ／ルール（BOARD #10）', () => {
-  const open = Object.keys(LEVER_PENDING).filter(id => SCENARIOS.some(s => s.id === id));
-  assert(open.length > 0,
-    'LEVER_PENDING に載っているシナリオが1本も登録されていない — 表を掃除すること');
-  for(const id of open){
-    const sc = SCENARIOS.find(s => s.id === id);
-    const intended = intendedOf(sc);
-    const clears = MOVES.filter(m => !intended.includes(m.key))
-      .filter(m => attempt(sc, {build:true, move:m}) === true);
-    assert(clears.length > 0,
-      `${id} は意図したレバー以外でクリアできなくなった — GAP は閉じている。`
-      + 'LEVER_PENDING から消せば G4 が本物の assert になる');
-  }
-  return open.map(id => `${id}: ${LEVER_PENDING[id]}`).join(' ／ ');
-});
-
-gap('step3 の Write below etc は sandbox なのに同梱扱い（§4.3 / §4.4）',
-    'コンテナレーン（step3 ↔ step4 入れ替え）', () => {
-  const s = CHAIN.find(x => x.id === 'cron');
-  assert(s, 'cron 段が無い — 入れ替えが入ったなら MATURITY_PENDING と この gap を消すこと');
-  assert(RULE_MATURITY[s.rule] === 'sandbox' && !s.needs.includes('falcoctl'),
-    `${s.id} の成熟度と falcoctl 要求が一致した（${s.rule} = ${RULE_MATURITY[s.rule]}）`
-    + ' — GAP は閉じている。MATURITY_PENDING から cron を消して gap() を削ること');
-  return `${s.id}: ${s.rule} は maturity_sandbox（falco-sandbox_rules.yaml）＝リリースパッケージに`
-       + '同梱されないのに、模型では falcoctl 無しで鳴る。§4.4 の「4本すべて stable」も誤り。'
-       + 'コンテナレーンが step3 ↔ step4 の入れ替えで両方同時に直す';
 });
 
 gap('HUD のドロップ率が p/(1+p) で表示される', 'Phase 1', () => {
