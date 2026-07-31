@@ -30,7 +30,8 @@ import { updateVerdict } from '../../src/ui.js';
 import { evaluate, CHAIN, RESPONSE, DEPS, BUILD_ORDER, OWNER, ROLES, blameOf,
          SCENARIOS, startScenario, activeChain, activeWaves, waveCount,
          goalStatus, passResults, runAttack, tickReveal, build, requestBuild,
-         buildOrAsk, fixOrAsk, canUseLever, allowedDrivers } from '../../src/campaign.js';
+         buildOrAsk, fixOrAsk, canUseLever, allowedDrivers,
+         negatedSyscalls } from '../../src/campaign.js';
 import { step, spawn, N } from '../../src/sim.js';
 import { DISTRICTS } from '../../src/layout.js';
 import { DEPLOYMENTS, ORCH, NODE_OSES, SOCKETS, K8S_METAS, DRIVERS,
@@ -815,6 +816,16 @@ function solve(sc){
     if(S.tune.slowOutput) S.tune.slowOutput = false;
     if(S.tune.syscallSet === 'all') S.tune.syscallSet = 'default';
     if(model().burst > 0) S.tune.bufPreset = 10;
+    /* a negative entry deactivates a syscall the enabled rules ask for
+       (INVARIANTS 2.4), and nothing downstream can win that back — no amount of
+       building makes an event that was never collected exist */
+    if(negatedSyscalls().length) S.tune.syscallCustom = [];
+    /* Still over capacity with the obvious things put back? Then the remaining
+       lever is the input side (INVARIANTS 2.2) — which is the answer on a node
+       too small for the consumer knob to have anywhere to go. Skipped when the
+       scenario declares goal.minPassRatio, because that is a scenario saying in
+       so many words that narrowing is NOT its answer. */
+    if(model().util > 1 && sc.goal.minPassRatio === null) S.tune.syscallSet = 'custom';
   }
 
   buildWork(sc);
@@ -921,8 +932,15 @@ const INTENDED_LEVER = {
   'eyes-but-no-hands':       [],                 /* 08 を建てる（STACK は build が倒す）*/
   'a-different-source':      [],                 /* 07 プラグイン入力を建てる */
   /* 未登録の3本。登録された瞬間にこの検査の対象になる（INVARIANTS §8）*/
-  'silent-blind-spot':       ['syscallCustom'],  /* 負の指定を外す */
-  'nodes-are-not-buffers':   ['cpusPerBuf'],     /* 小さいノードに合わせて割り直す */
+  /* 負の指定を外す。プリセットを default に戻すのも同じ手 — 負の指定は
+     base_syscalls を手書きしている間だけ効く（campaign.js §negatedSyscalls）ので、
+     「custom_set をやめる」と「!entry を消す」は falco.yaml では同じ操作 */
+  'silent-blind-spot':       ['syscallCustom','syscallSet'],
+  /* 2 vCPU ではバッファ本数が既に下限の1本で、cpus_for_each_buffer を上げても
+     ceil(2/4) は 1 のまま = レバーが死んでいる。生きているのは入力側だけ。
+     「既定に戻す」ではなく「一度も間違っていなかった既定を絞る」が答えなので、
+     正解のレバーは逸脱の有無では決まらない */
+  'nodes-are-not-buffers':   ['syscallSet'],
   'rules-not-followed':      []                  /* 09 ルール配布を建てる */
 };
 const intendedOf = sc => Array.isArray(sc.insight && sc.insight.lever)
@@ -1031,26 +1049,23 @@ check('意図したレバー以外ではクリアできない（G4）', () => {
 });
 
 check('正解のレバーでは実際にクリアできる', () => {
+  /* 同じ MOVES から引く。「宣言された逸脱を既定に戻す」ではないのが要点で、
+     nodes-are-not-buffers の答えは *一度も間違っていなかった既定を絞ること* —
+     逸脱を戻す形の答えしか書けない検査は、その手のシナリオを不当に赤にする。 */
   const lines = [];
   for(const sc of SCENARIOS){
     const intended = intendedOf(sc);
     if(!intended.length) continue;                  /* 建てるだけが答え = G3 が見ている */
-    assert(startScenario(sc.id), `${sc.id}: 起動できない`);
-    buildWork(sc);
-    /* 宣言された逸脱を既定に戻す。これが「正解の手」*/
-    for(const k of intended){
-      assert(canUseLever(k === 'load' ? 'load' : k === 'stack' ? 'stack' : 'tuning'),
-        `${sc.id}: 正解のレバー ${k} をこの役割が持っていない`);
-      if(k === 'load') S.load = 1.0;
-      else if(k === 'stack') setMode('sysdig');
-      else S.tune[k] = Array.isArray(TUNE_DEFAULTS[k])
-        ? TUNE_DEFAULTS[k].slice() : TUNE_DEFAULTS[k];
-    }
-    walkPass();
-    const st = goalStatus();
-    assert(st && st.cleared, `${sc.id}: 正解のレバー（${intended.join('+')}）を戻してもクリアできない`
-      + ` — ${st ? st.items.map(i=>`${i.key} ${i.actual}${i.ok?'':'✗'}`).join(' ') : '判定が出ない'}`);
-    lines.push(`${sc.id}: ${intended.join('+')} を既定に戻す → クリア`);
+    const candidates = MOVES.filter(m => intended.includes(m.key));
+    assert(candidates.length > 0,
+      `${sc.id}: 正解として宣言された ${intended.join('+')} に対応する手が MOVES に無い`
+      + ' — 手を足すか、宣言を直すこと');
+    const wins = candidates.filter(m => attempt(sc, {build:true, move:m}) === true);
+    assert(wins.length > 0,
+      `${sc.id}: 正解のレバー（${intended.join('+')}）を動かしてもクリアできない — `
+      + candidates.map(m => m.jp).join(' / ') + ' を全部試して不成立。'
+      + 'シナリオがクリア不能か、正解の宣言が間違っている');
+    lines.push(`${sc.id}: ${wins.map(m=>m.jp).join(' / ')} → クリア`);
   }
   return lines.join(' · ') || '（レバーが答えのシナリオが無い）';
 });
