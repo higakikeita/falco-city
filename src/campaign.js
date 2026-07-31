@@ -15,7 +15,6 @@ import { DISTRICTS, byId, isFlow, setCampaignView } from './layout.js';
 import { S, GAME, model, noise, TUNE_DEFAULTS, hasCap, working, unmetOf } from './state.js';
 import { DEPLOYMENTS } from './districts.data.js';
 import { districtObjs } from './city.js';
-import { polPoints } from './sim.js';
 import { setMode, setDeploy, applyShield, onTuneChange } from './controls.js';
 import { SCENARIOS, DEFAULT_SCENARIO_ID, scenarioById, addScenarioError } from './scenarios/index.js';
 import { envOf, deployOf, driverOf, wavesOf, stepsOf } from './scenarios/schema.js';
@@ -64,8 +63,20 @@ const CHAIN = [
     needs:SYSCALL_PATH, needsCaps:['kernelPath'], needsSyscalls:EXEC_FAMILY },
   { id:'shadow', jp:'/etc/shadow を読んで資格情報を探す', rule:'Read sensitive file untrusted',
     needs:SYSCALL_PATH, needsCaps:['kernelPath'], needsSyscalls:OPEN_FAMILY },
+  /* `Write below etc` is tagged maturity_sandbox, so like `imds` below it is NOT
+     in the release package — only the stable set is loaded by default. Sandbox
+     ships as its own OCI artifact (`falco-sandbox-rules`), so this detection
+     does not exist on the node until falcoctl fetches it (INVARIANTS 4.1).
+     Two steps in the chain now depend on 09 for the same structural reason at
+     two different maturity levels, which is the honest picture: `imds` is
+     incubating, this is sandbox, and neither ships by default. */
   { id:'cron', jp:'/etc/cron.d に書き込んで永続化する', rule:'Write below etc',
-    needs:SYSCALL_PATH, needsCaps:['kernelPath'], needsSyscalls:OPEN_FAMILY },
+    needs:[...SYSCALL_PATH,'falcoctl'], needsCaps:['kernelPath'], needsSyscalls:OPEN_FAMILY,
+    why:'この検知は <b>sandbox</b>（<code>maturity_sandbox</code>）で、'+
+         'リリースパッケージに同梱されるのは <b>stable</b> のルールだけ。'+
+         'sandbox は <code>falco-sandbox-rules</code> という<b>別の OCI アーティファクト</b>で、'+
+         'それを取ってくるのが <code>falcoctl</code>（<b>09 ルール配布</b>）。'+
+         '<b>持っていないルールは鳴らない。</b>' },
   /* `Drop and execute new binary in container` is tagged maturity_stable, so it
      ships in the release package and falcoctl has nothing to do with it. It used
      to be listed as needing 09, which made the example contradict the very claim
@@ -343,7 +354,8 @@ function frontier(){
 function applyGameVisibility(){
   for(const d of DISTRICTS)
     districtObjs[d.id].group.visible = !GAME.on || GAME.built.has(d.id);
-  polPoints.visible = !GAME.on || GAME.built.has('falcoctl') || GAME.built.has('sysdig');
+  /* the rule stream's visibility is sim.js's — it owns polPoints, and writing it
+     from here as well is what let step() overwrite this every frame (BOARD #12) */
   GAME.frontier = frontier();
 }
 
@@ -527,6 +539,22 @@ function evaluate(chain = activeChain(), opts = {}){
   const M = model(), Nz = noise();
   const budget = opts.budget || freshBudget(M, Nz);
   const out = [];
+
+  /* `syscall_event_drops.actions: exit` stopped the agent. Nothing is being
+     collected from any source — the ring buffer takes no inflow and no rule is
+     evaluated, so there is no path by which any step could be detected. The
+     panel says "検知はゼロです" and this is what makes that sentence true
+     rather than decorative (INVARIANTS 1.6). */
+  if(S.dead){
+    const why = '<code>syscall_event_drops.actions: exit</code> でエージェントが停止している。'+
+      '<b>どのソースからも1件も集めていない</b>ので、この段は原理的に検知できない。'+
+      '<b>黙って盲目になる</b>（<code>ignore</code>）より大きな声で失敗するほうを選んだ結果で、'+
+      'そこは設計どおり — ただし<b>止まっている間の検知はゼロ</b>。';
+    for(const s of chain) out.push({...s, caught:false, why, cause:'dead'});
+    if(opts.response ?? hasResponse())
+      out.push({...RESPONSE, response:true, caught:false, why, cause:'dead'});
+    return out;
+  }
 
   for(const s of chain){
     /* built is not the same question as working: a district that is standing but
