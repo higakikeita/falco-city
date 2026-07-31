@@ -73,9 +73,9 @@ canvas{display:block}
 
 /* ---------- campaign panel ---------- */
 .campaign{display:none;width:336px;padding:15px 17px 16px;
-  max-height:calc(100vh - 250px);overflow-y:auto;scrollbar-width:thin}
-.campaign.on{display:block}
-.cmp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  max-height:calc(100vh - 300px);flex-direction:column;min-height:0}
+.campaign.on{display:flex}
+.cmp-head{flex:none;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
   padding-bottom:11px;border-bottom:1px solid var(--grey-10)}
 .cmp-eyebrow{font-family:var(--font-mono);font-size:9px;letter-spacing:.18em;
   color:var(--grey-25);text-transform:uppercase}
@@ -83,14 +83,15 @@ canvas{display:block}
 .cmp-score{font-family:var(--font-mono);text-align:right;white-space:nowrap}
 .cmp-score b{font-size:22px;font-weight:400;color:var(--black)}
 .cmp-score span{font-size:9.5px;color:var(--grey-30);display:block;letter-spacing:.1em}
-.cmp-hint{font-size:11.5px;line-height:1.65;color:var(--grey-50);
-  background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:11px 0}
+.cmp-hint{flex:none;font-size:11.5px;line-height:1.65;color:var(--grey-50);
+  background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:9px 0}
 .cmp-hint.good{background:rgba(189,247,139,.3);color:var(--grey-60)}
 .cmp-hint b{color:var(--black);font-weight:600}
 .cmp-hint code{font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,.05);
   padding:1px 4px;border-radius:3px}
 
-.cmp-build{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.cmp-build{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;
+  flex:0 1 auto;min-height:76px;max-height:150px;overflow-y:auto;scrollbar-width:thin}
 .cmp-row{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;
   font-family:var(--font-mono);font-size:10.5px;transition:.16s}
 .cmp-row .n{color:var(--grey-25);font-size:9px;width:15px;flex:none}
@@ -105,13 +106,14 @@ canvas{display:block}
 .cmp-row.locked{opacity:.42}
 .cmp-row.locked .lk{color:var(--grey-25);font-size:9.5px;flex:none}
 
-.cmp-run{width:100%;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;
+.cmp-run{width:100%;flex:none;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;
   text-transform:uppercase;border:0;background:var(--red-ui);color:#fff;padding:11px;
   border-radius:9px;cursor:pointer;transition:.16s}
 .cmp-run:hover{background:#D3454A}
 .cmp-run:disabled{background:var(--grey-20);cursor:default}
 
-.cmp-results{margin-top:11px;display:flex;flex-direction:column;gap:5px}
+.cmp-results{margin-top:11px;display:flex;flex-direction:column;gap:5px;
+  flex:1 1 auto;min-height:88px;overflow-y:auto;scrollbar-width:thin}
 .cmp-res{border-radius:7px;padding:8px 10px;font-size:11px;line-height:1.55;
   border-left:3px solid var(--grey-20);background:var(--grey-10)}
 .cmp-res.hit{border-left-color:var(--lumin);background:rgba(189,247,139,.24)}
@@ -128,8 +130,19 @@ canvas{display:block}
   text-transform:uppercase;display:inline-block;margin-top:5px;padding:2px 6px;
   border-radius:4px;background:rgba(0,0,0,.06);color:var(--grey-50);border-left:2px solid}
 
+/* ---------- sides (attacker / defender) ---------- */
+.cmp-sides{flex:none;display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:9px 0 0}
+.cmp-sides button{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;
+  border:1px solid var(--grey-10);background:transparent;color:var(--grey-40);
+  padding:5px 10px;border-radius:7px;cursor:pointer;transition:.16s;white-space:nowrap}
+.cmp-sides button:hover:not(:disabled){border-color:var(--grey-20);color:var(--black)}
+.cmp-sides button.on{background:var(--deep-see);border-color:var(--deep-see);color:#fff}
+.cmp-sides button:disabled{opacity:.4;cursor:not-allowed}
+.cmp-sides .ask{font-family:var(--font-mono);font-size:9px;color:var(--grey-25);
+  letter-spacing:.1em;margin-left:auto}
+
 /* ---------- roles ---------- */
-.cmp-roles{display:flex;flex-wrap:wrap;gap:4px;padding:11px 0 0}
+.cmp-roles{flex:none;display:flex;flex-wrap:wrap;gap:4px;padding:8px 0 0}
 .cmp-roles button{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;
   border:1px solid var(--grey-10);background:transparent;color:var(--grey-40);
   padding:5px 8px;border-radius:7px;cursor:pointer;transition:.16s;white-space:nowrap;
@@ -150,12 +163,15 @@ canvas{display:block}
 .cmp-row button.askbtn:hover{background:var(--grey-10);color:var(--black)}
 
 /* a lever that belongs to another team is visible but untouchable */
-.dutylock{position:relative;opacity:.4;filter:grayscale(.55)}
+.dutylock{position:relative;filter:grayscale(.7)}
 .ui.interactive .dutylock,.ui.interactive .dutylock *{pointer-events:none}
-.dutylock::after{content:attr(data-owner);position:absolute;top:50%;left:50%;
-  transform:translate(-50%,-50%);font-family:var(--font-mono);font-size:9px;
-  letter-spacing:.12em;text-transform:uppercase;background:var(--black);color:#fff;
-  padding:4px 9px;border-radius:5px;white-space:nowrap;filter:grayscale(0)}
+/* veil the controls rather than dimming the whole panel, so the owner reads clearly */
+.dutylock::before{content:'';position:absolute;inset:0;border-radius:inherit;
+  background:rgba(250,251,251,.78)}
+.dutylock::after{content:attr(data-owner);position:absolute;top:50%;right:9px;
+  transform:translateY(-50%);font-family:var(--font-mono);font-size:9px;
+  letter-spacing:.12em;text-transform:uppercase;background:var(--grey-70);color:#fff;
+  padding:4px 9px;border-radius:5px;white-space:nowrap}
 
 .rrep{margin-top:11px;border-top:1px solid var(--grey-10);padding-top:10px;
   display:flex;flex-direction:column;gap:4px}
@@ -172,6 +188,8 @@ canvas{display:block}
 .rnote{font-size:11px;line-height:1.6;color:var(--grey-50);background:rgba(255,169,64,.13);
   border-left:2px solid var(--orange);border-radius:6px;padding:7px 9px;margin-top:5px}
 .rnote b{color:var(--grey-60);font-weight:600}
+.rnote code{font-family:var(--font-mono);font-size:10.5px;background:rgba(0,0,0,.05);
+  padding:1px 4px;border-radius:3px}
 
 /* ---------- top-right: legend + hud ---------- */
 #topRight{top:20px;right:20px;width:262px;display:flex;flex-direction:column;gap:10px;
@@ -409,22 +427,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     </div>
   </div>
 
-  <div class="panel campaign" id="campaign">
-    <div class="cmp-head">
-      <div>
-        <div class="cmp-eyebrow">mission</div>
-        <div class="cmp-title">検知パイプラインを一から建てる</div>
-      </div>
-      <div class="cmp-score"><b id="cmpScore">0</b><span>/ 6 検知</span></div>
-    </div>
-    <div class="cmp-hint" id="cmpHint">
-      いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
-    </div>
-    <div class="cmp-build" id="cmpBuild"></div>
-    <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
-    <div class="cmp-results" id="cmpResults"></div>
-  </div>
-
   <div class="segwrap">
     <div class="panel seg" id="modeSeg">
       <span class="caplbl">stack</span>
@@ -443,6 +445,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button data-drv="ebpf">ebpf</button>
       <button data-drv="kmod">kmod</button>
     </div>
+  </div>
+
+  <!-- Campaign panel sits below the lever rows on purpose: at 1280x720 it used
+       to push STACK / DEPLOY / DRIVER off screen, and those are the levers the
+       role layer is about. -->
+  <div class="panel campaign" id="campaign">
+    <div class="cmp-head">
+      <div>
+        <div class="cmp-eyebrow">mission</div>
+        <div class="cmp-title" id="cmpTitle">検知パイプラインを一から建てる</div>
+      </div>
+      <div class="cmp-score"><b id="cmpScore">0</b><span>/ 6 検知</span></div>
+    </div>
+    <div class="cmp-sides" id="cmpSides"></div>
+    <div class="cmp-roles" id="cmpRoles"></div>
+    <div class="cmp-hint" id="cmpHint">
+      いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
+    </div>
+    <div class="cmp-build" id="cmpBuild"></div>
+    <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
+    <div class="cmp-results" id="cmpResults"></div>
   </div>
 </div>
 

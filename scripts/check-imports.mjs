@@ -97,5 +97,20 @@ for(const [f, s] of Object.entries(src)){
     for(const m of missing) console.log(`        missing import: ${m}`);
   } else console.log(`ok    ${DIR}/${f}`);
 }
-if(bad){ console.error(`\ncheck-imports: ${bad} module(s) with missing imports`); process.exit(1); }
-console.log('\nall modules import what they use');
+/* Rules / rendering separation: campaign.js decides, ui.js draws. If game logic
+ * starts reaching for the DOM the split stops being real, so assert it. */
+const DOM_FREE = ['campaign.js', 'state.js', 'layout.js'];
+for(const f of DOM_FREE){
+  if(!src[f]) continue;
+  const body = codeOnly(src[f]);
+  const hits = [...body.matchAll(/\b(document|getElementById|querySelector(?:All)?|innerHTML)\b/g)]
+    .map(m => m[1]);
+  if(hits.length){
+    bad++;
+    console.log(`FAIL  ${DIR}/${f} must stay DOM-free`);
+    console.log(`        found: ${[...new Set(hits)].join(', ')}`);
+  } else console.log(`ok    ${DIR}/${f} is DOM-free`);
+}
+
+if(bad){ console.error(`\ncheck-imports: ${bad} problem(s)`); process.exit(1); }
+console.log('\nall modules import what they use, and the rules layer holds no DOM');

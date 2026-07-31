@@ -2,11 +2,16 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, hex6 } from './layout.js';
-import { S, GAME, model } from './state.js';
+import { S, model } from './state.js';
 import { camera, controls, renderer, scene, homeCam, homeView, goHome,
          HOME_TGT, flyTo, CITY_BOX } from './scene.js';
 import { districtObjs, hitTargets } from './city.js';
 import { setMode } from './controls.js';
+import {
+  GAME, DEPS, BUILD_ORDER, SIDES, ROLES, roleById, OWNER, LEVER_OWNER,
+  canBuild, canUseLever, roleReport, verdictText, score,
+  build, requestBuild, runAttack, setRole, setSide, setUiMode, onCampaignChange
+} from './campaign.js';
 
 
 /* ============================================================
@@ -37,7 +42,10 @@ function updateTags(){
     el.classList.toggle('hot', S.hovered===d.id || S.selected===d.id);
     el.classList.toggle('dim',
       d.id==='sysdig' && S.mode!=='sysdig');
-    if(GAME.on && !GAME.built.has(d.id)) el.style.opacity = 0;
+    /* a district that has not been built is not on the map at all */
+    const unbuilt = GAME.on && !GAME.built.has(d.id);
+    el.style.display = unbuilt ? 'none' : '';
+    if(unbuilt) el.style.opacity = 0;
   }
 }
 
@@ -146,6 +154,246 @@ const reset = document.createElement('button');
 reset.innerHTML = `<span class="n">↺</span>全体`;
 reset.onclick = ()=>{ closeDrawer(); goHome(); };
 tour.appendChild(reset);
+
+
+/* ============================================================
+   14d. CAMPAIGN PANEL — the receiving side
+   ------------------------------------------------------------
+   campaign.js decides; this renders. It subscribes to the change feed and
+   redraws, so the two can be worked on without sharing a line. Every DOM
+   reference for the campaign lives here and nowhere else.
+   ============================================================ */
+const elCmp   = document.getElementById('campaign');
+const elTitle = document.getElementById('cmpTitle');
+const elSides = document.getElementById('cmpSides');
+const elRoles = document.getElementById('cmpRoles');
+const elHint  = document.getElementById('cmpHint');
+const elBuild = document.getElementById('cmpBuild');
+const elRun   = document.getElementById('cmpRun');
+const elRes   = document.getElementById('cmpResults');
+const elScore = document.getElementById('cmpScore');
+
+const DEFAULT_MISSION = '検知パイプラインを一から建てる';
+const EMPTY_PLOT = 'いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。';
+
+/* lever group -> the panel it lives in. campaign.js names the group; only this
+   file knows which node that is. */
+const LEVER_NODE = {
+  deploy:'#deploySeg', driver:'#drvSeg', tuning:'.panel.tune', stack:'#modeSeg'
+};
+
+function setHint(html, good){
+  elHint.className = 'cmp-hint' + (good ? ' good' : '');
+  elHint.innerHTML = html;
+}
+
+/* ---- a lever you do not own is visible but untouchable ---- */
+function applyRoleLocks(){
+  for(const [group, sel] of Object.entries(LEVER_NODE)){
+    const el = document.querySelector(sel);
+    if(!el) continue;
+    const lock = !canUseLever(group);
+    el.classList.toggle('dutylock', lock);
+    if(lock) el.dataset.owner = `${roleById(LEVER_OWNER[group]).short} 担当`;
+    else delete el.dataset.owner;
+  }
+}
+
+/* ---- side picker: defence is playable, offence is shown as not yet ---- */
+function renderSides(){
+  elSides.innerHTML = '';
+  SIDES.forEach(sd=>{
+    const b = document.createElement('button');
+    b.textContent = sd.chip;
+    if(GAME.side === sd.id) b.className = 'on';
+    if(!sd.enabled){
+      b.disabled = true;
+      b.title = sd.jp + '— まだ実装されていません';
+    } else b.onclick = ()=> setSide(sd.id);
+    elSides.appendChild(b);
+  });
+  const auto = document.createElement('span');
+  auto.className = 'ask';
+  auto.textContent = GAME.side === 'defense' ? '攻撃 Auto' : '';
+  elSides.appendChild(auto);
+}
+
+/* ---- role picker ---- */
+function renderRoles(){
+  elRoles.innerHTML = '';
+  const add = (id, label, color)=>{
+    const b = document.createElement('button');
+    if(GAME.role === id) b.className = 'on';
+    if(color){
+      const i = document.createElement('i');
+      i.style.background = color;
+      b.appendChild(i);
+    }
+    b.appendChild(document.createTextNode(label));
+    b.onclick = ()=> setRole(id);
+    elRoles.appendChild(b);
+  };
+  add(null, '全役');
+  ROLES.forEach(r => add(r.id, r.chip, r.color));
+  const ask = document.createElement('span');
+  ask.className = 'ask';
+  ask.textContent = GAME.asks ? `依頼 ${GAME.asks}件` : '';
+  elRoles.appendChild(ask);
+}
+
+/* ---- build list: rows carry their owner, other teams' stages are asked for ---- */
+function renderBuildList(){
+  elBuild.innerHTML = '';
+  BUILD_ORDER.forEach(id=>{
+    const d = byId(id);
+    const owner = roleById(OWNER[id]);
+    const done = GAME.built.has(id), open = !done && canBuild(id);
+    const mine = !GAME.role || !owner || GAME.role === owner.id;
+
+    const row = document.createElement('div');
+    row.className = 'cmp-row ' + (done ? 'done' : open ? '' : 'locked')
+                  + (owner && GAME.role === owner.id ? ' mine' : '');
+    row.innerHTML = `<span class="n">${d.n}</span><span class="nm">${d.jp}</span>`;
+
+    if(owner){
+      const badge = document.createElement('span');
+      badge.className = 'own';
+      badge.textContent = owner.short;
+      badge.style.borderLeftColor = owner.color;
+      row.appendChild(badge);
+    }
+
+    if(done) row.insertAdjacentHTML('beforeend', '<span class="tick">✓</span>');
+    else if(open){
+      const b = document.createElement('button');
+      if(mine){
+        b.textContent = '建設';
+        b.onclick = ()=> build(id);
+      } else {
+        b.textContent = `${owner.short} に依頼`;
+        b.className = 'askbtn';
+        b.onclick = ()=> requestBuild(id);
+      }
+      row.appendChild(b);
+    } else {
+      row.insertAdjacentHTML('beforeend',
+        `<span class="lk">要 ${DEPS[id].map(k=>byId(k).jp).join('・')}</span>`);
+    }
+    elBuild.appendChild(row);
+  });
+}
+
+/* ---- results, with the role each miss is charged to ---- */
+function renderRoleReport(){
+  const rep = roleReport();
+  const wrap = document.createElement('div');
+  wrap.className = 'rrep';
+  wrap.innerHTML = '<h5>role scorecard</h5>';
+  rep.roles.forEach(r=>{
+    const row = document.createElement('div');
+    row.className = 'rrow ' + (r.misses ? 'blamed' : r.built === r.owns ? 'clean' : '');
+    row.style.borderLeftColor = r.color;
+    row.innerHTML =
+      `<span class="rn">${r.jp}${r.mine ? '（あなた）' : ''}</span>`+
+      `<span class="rv">${r.built}/${r.owns} 建設${r.misses ? ` · 見逃し ${r.misses}` : ''}</span>`;
+    wrap.appendChild(row);
+  });
+  rep.notes.forEach(html=>{
+    const n = document.createElement('div');
+    n.className = 'rnote';
+    n.innerHTML = html;
+    wrap.appendChild(n);
+  });
+  elRes.appendChild(wrap);
+}
+
+function renderResults(){
+  elRes.innerHTML = '';
+  elScore.textContent = score();
+  if(!GAME.results) return;
+  GAME.results.slice(0, GAME.reveal).forEach((r,i)=>{
+    const el = document.createElement('div');
+    el.className = 'cmp-res ' + (r.caught ? 'hit' : 'miss');
+    el.innerHTML =
+      `<span class="st">${r.response ? '対処' : 'step '+(i+1)} · ${r.caught ? '検知' : '見逃し'}</span>`+
+      `<span class="ac">${r.jp}</span>`+
+      `<span class="rl">${r.rule}</span>`+
+      (r.why ? `<span class="wy">${r.why}</span>` : '');
+    const b = roleById(r.blame);
+    if(b){
+      const s = document.createElement('span');
+      s.className = 'bl';
+      s.style.borderLeftColor = b.color;
+      s.textContent = `起因 · ${b.jp}`;
+      el.appendChild(s);
+    }
+    elRes.appendChild(el);
+  });
+  const done = GAME.reveal >= GAME.results.length;
+  if(done){
+    const v = verdictText();
+    if(v) setHint(v.html, v.good);
+    renderRoleReport();
+  }
+  elRun.disabled = !done;
+  elRes.scrollTop = elRes.scrollHeight;      /* follow the reveal */
+}
+
+/* ---- the change feed ---- */
+function renderCampaignAll(){
+  renderSides();
+  renderRoles();
+  renderBuildList();
+  applyRoleLocks();
+  renderResults();
+}
+
+onCampaignChange(ev=>{
+  switch(ev.type){
+    case 'mode':
+      elCmp.classList.toggle('on', GAME.on);
+      [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
+        b.classList.toggle('on', b.dataset.ui === ev.mode));
+      document.getElementById('hint').classList.add('gone');
+      elScore.textContent = '0';
+      elRun.disabled = false;
+      setHint(EMPTY_PLOT, false);
+      elTitle.textContent = GAME.role ? roleById(GAME.role).mission : DEFAULT_MISSION;
+      renderCampaignAll();
+      closeDrawer();
+      goHome();
+      break;
+    case 'role': {
+      const r = ev.id ? roleById(ev.id) : null;
+      elTitle.textContent = r ? r.mission : DEFAULT_MISSION;
+      setHint(r ? `<b>${r.jp}</b>として参加する。${r.brief}` : EMPTY_PLOT, false);
+      renderSides(); renderRoles(); renderBuildList(); applyRoleLocks();
+      break;
+    }
+    case 'side':
+      setHint(`<b>${SIDES.find(s=>s.id===ev.id).jp}</b>。`+
+              SIDES.find(s=>s.id===ev.id).brief, false);
+      renderSides();
+      break;
+    case 'build':
+      setHint(ev.unlock, true);
+      renderBuildList();
+      renderResults();
+      flyTo(byId(ev.id).cam, districtObjs[ev.id].center);
+      break;
+    case 'asks':
+      renderRoles();
+      break;
+    case 'run':
+    case 'reveal':
+      renderResults();
+      break;
+  }
+});
+
+document.querySelectorAll('#uiModeSeg button').forEach(b=>
+  b.onclick = ()=> setUiMode(b.dataset.ui));
+elRun.onclick = runAttack;
 
 
 /* ============================================================
@@ -288,6 +536,8 @@ function fmt(n){
 
 export {
   tagEls,
+  applyRoleLocks,
+  renderCampaignAll,
   updateTags,
   select,
   closeDrawer,
