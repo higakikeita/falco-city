@@ -45,5 +45,10 @@ export default {
           '<code>base_syscalls</code> を <code>custom_set</code> に絞る。'
   },
 
-  goal:{ detect:6, contain:true, maxAsks:3, maxDropPct:1 }
+  /* BOARD #36: this also cleared by turning NODE LOAD down and leaving
+     base_syscalls at `all`. util = 流入/消費能力, so the numerator moves from the
+     load side too — but load is what the workload happens to be doing, not a
+     treatment you get to apply. lockLoad refuses a clear that got there by
+     turning the workload down. The inherited mistake is still `all`. */
+  goal:{ detect:6, contain:true, maxAsks:3, maxDropPct:1, lockLoad:true }
 };
