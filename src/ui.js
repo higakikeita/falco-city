@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, hex6 } from './layout.js';
-import { S, model } from './state.js';
+import { S, model, hasCap } from './state.js';
 import { camera, controls, renderer, scene, homeCam, homeView, goHome,
          HOME_TGT, flyTo, CITY_BOX } from './scene.js';
 import { districtObjs, hitTargets } from './city.js';
@@ -10,7 +10,9 @@ import { setMode } from './controls.js';
 import {
   GAME, DEPS, BUILD_ORDER, SIDES, ROLES, roleById, OWNER, LEVER_OWNER,
   canBuild, canUseLever, roleReport, verdictText, score,
-  build, requestBuild, runAttack, setRole, setSide, setUiMode, onCampaignChange
+  build, requestBuild, runAttack, setRole, setSide, setUiMode, onCampaignChange,
+  SCENARIOS, activeScenario, activeEnv, startScenario, goalStatus,
+  allowedDeploys, allowedDrivers
 } from './campaign.js';
 
 
@@ -164,6 +166,7 @@ tour.appendChild(reset);
    reference for the campaign lives here and nowhere else.
    ============================================================ */
 const elCmp   = document.getElementById('campaign');
+const elEyebrow = elCmp && elCmp.querySelector('.cmp-eyebrow');
 const elTitle = document.getElementById('cmpTitle');
 const elSides = document.getElementById('cmpSides');
 const elRoles = document.getElementById('cmpRoles');
@@ -174,7 +177,16 @@ const elRes   = document.getElementById('cmpResults');
 const elScore = document.getElementById('cmpScore');
 
 const DEFAULT_MISSION = '検知パイプラインを一から建てる';
-const EMPTY_PLOT = 'いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。';
+
+/* labels for things the rules layer only names. campaign.js hands over keys and
+   numbers; the sentences the player reads are written here, and the sentences a
+   scenario needs are written in the scenario. Neither lives in the logic. */
+const GOAL_LBL = {
+  detect: (i) => `検知 ${i.actual}/${i.of} — ${i.target} 段以上`,
+  contain:(i) => `封じ込め — ${i.actual ? '成立' : '未成立'}`,
+  asks:   (i) => `他チームへの依頼 ${i.actual}件 — ${i.target}件まで`,
+  drop:   (i) => `ドロップ ${i.actual}% — ${i.target}% まで`
+};
 
 /* lever group -> the panel it lives in. campaign.js names the group; only this
    file knows which node that is. */
@@ -182,9 +194,48 @@ const LEVER_NODE = {
   deploy:'#deploySeg', driver:'#drvSeg', tuning:'.panel.tune', stack:'#modeSeg'
 };
 
+/* The hint carries scenario prose now, and prose has no length limit while the
+   panel does — 1280×720 leaves the column 420px in total, which is the floor the
+   game supports. So the hint gets a floor (a setup that collapses to one clipped
+   line is not readable) and a ceiling (a long one must not push the build list or
+   the run button out of the panel), and the two lists give up the difference.
+   Beyond the ceiling the hint scrolls, and nothing below it moves. */
+Object.assign(elHint.style, {flex:'0 0 auto', minHeight:'48px', maxHeight:'104px',
+                             overflowY:'auto'});
+elBuild.style.minHeight = '68px';
+elRes.style.minHeight = '76px';      /* scrolls, and the reveal follows itself */
+
+/* The panel and the minimap are both fixed to the left edge, one from the top
+   and one from the bottom, so at the supported minimum of 1280×720 they overlap
+   — the minimap paints last and lands on top of the run button, which makes it
+   unclickable. Nothing in the CSS can know how much room there is, so measure.
+   When there is not enough for both, the panel wins: it is the game, and the
+   minimap is a convenience. Visibility rather than display, so the element
+   still has a box to measure and the decision cannot oscillate. */
+/* head + the two chip rows + a full-height hint + the build list + the run
+   button + a results list, measured. Below this the panel has to take the
+   minimap's space rather than shrink the hint into an unreadable strip. */
+const PANEL_NEEDS = 480;
+const elMini = document.getElementById('minimap');
+
+function fitCampaignPanel(){
+  if(!elCmp.classList.contains('on')){
+    elCmp.style.maxHeight = '';
+    if(elMini) elMini.style.visibility = '';
+    return;
+  }
+  const top = elCmp.getBoundingClientRect().top;
+  const room = (elMini ? elMini.getBoundingClientRect().top : innerHeight) - top - 12;
+  const tight = room < PANEL_NEEDS;
+  if(elMini) elMini.style.visibility = tight ? 'hidden' : '';
+  elCmp.style.maxHeight = Math.round(tight ? innerHeight - top - 20 : room) + 'px';
+}
+addEventListener('resize', fitCampaignPanel);
+
 function setHint(html, good){
   elHint.className = 'cmp-hint' + (good ? ' good' : '');
   elHint.innerHTML = html;
+  elHint.scrollTop = 0;
 }
 
 /* ---- a lever you do not own is visible but untouchable ---- */
@@ -199,9 +250,74 @@ function applyRoleLocks(){
   }
 }
 
+/* ---- scenario picker ------------------------------------------------------
+   A select rather than chips: the content lane is unbounded, so the control has
+   to survive N scenarios. It shares the sides row so the panel gains no height
+   — at 1280×720 there is none to spare. */
+const elScen = document.createElement('select');
+elScen.id = 'cmpScen';
+Object.assign(elScen.style, {
+  font:'inherit', fontFamily:'var(--font-mono)', fontSize:'9.5px',
+  padding:'4px 6px', borderRadius:'7px', border:'1px solid var(--grey-10)',
+  background:'transparent', color:'var(--grey-50)', maxWidth:'150px', cursor:'pointer'
+});
+elScen.onchange = ()=> startScenario(elScen.value);
+
+function renderScenarioPicker(){
+  const cur = activeScenario();
+  elScen.innerHTML = '';
+  SCENARIOS.forEach(s=>{
+    const o = document.createElement('option');
+    o.value = s.id; o.textContent = s.title;
+    if(cur && cur.id === s.id) o.selected = true;
+    elScen.appendChild(o);
+  });
+  elScen.disabled = SCENARIOS.length < 2;
+}
+
+/* ---- levers: reflect what the scenario handed over, and what it forbids ----
+   controls.js owns these widgets while the player drives them; when a scenario
+   sets them, somebody has to push the values back into the DOM, and that is
+   this side of the split. */
+function syncLeverWidgets(){
+  const on = (sel, attr, val)=> document.querySelectorAll(sel+' button').forEach(b=>
+    b.classList.toggle('on', b.dataset[attr] === String(val)));
+  on('#segSet','set',S.tune.syscallSet);
+  on('#segCpu','cpu',S.tune.cpusPerBuf);
+  on('#segAct','act',S.tune.dropAction);
+  on('#deploySeg','dep',S.deploy);
+  on('#drvSeg','drv',S.driver);
+  on('#modeSeg','mode',S.mode);
+  const buf = document.getElementById('rngBuf');
+  if(buf) buf.value = S.tune.bufPreset;
+  const slow = document.getElementById('chkSlow');
+  if(slow) slow.checked = S.tune.slowOutput;
+  const lr = document.getElementById('loadRange');
+  if(lr) lr.value = Math.round(S.load*100);
+  const lv = document.getElementById('loadVal');
+  if(lv) lv.textContent = '×'+S.load.toFixed(1);
+
+  /* an environment forbids what it has no room for: no cluster, no DaemonSet;
+     no node of your own, no kernel module. Not a rule of the game — a fact
+     about the place, so the button is simply not available. */
+  const deploys = allowedDeploys(), drivers = allowedDrivers();
+  const gate = (sel, attr, allowed)=>
+    document.querySelectorAll(sel+' button').forEach(b=>{
+      const ok = !GAME.on || allowed.includes(b.dataset[attr]);
+      b.disabled = !ok;
+      b.style.opacity = ok ? '' : '.35';
+      b.style.cursor  = ok ? '' : 'not-allowed';
+    });
+  gate('#deploySeg','dep',deploys);
+  /* where there is no kernel path controls.setDeploy has already closed the
+     driver row, and it is closed for a stronger reason than ours */
+  if(hasCap('kernelPath')) gate('#drvSeg','drv',drivers);
+}
+
 /* ---- side picker: defence is playable, offence is shown as not yet ---- */
 function renderSides(){
   elSides.innerHTML = '';
+  elSides.appendChild(elScen);
   SIDES.forEach(sd=>{
     const b = document.createElement('button');
     b.textContent = sd.chip;
@@ -230,14 +346,22 @@ function renderRoles(){
       b.appendChild(i);
     }
     b.appendChild(document.createTextNode(label));
-    b.onclick = ()=> setRole(id);
+    /* a scenario can fix the role — then this is a readout, not a choice */
+    if(GAME.roleLocked){
+      b.disabled = true;
+      b.style.opacity = GAME.role === id ? '' : '.35';
+      b.style.cursor = 'default';
+      b.title = 'このシナリオでは役割が固定されています';
+    } else b.onclick = ()=> setRole(id);
     elRoles.appendChild(b);
   };
   add(null, '全役');
   ROLES.forEach(r => add(r.id, r.chip, r.color));
   const ask = document.createElement('span');
   ask.className = 'ask';
-  ask.textContent = GAME.asks ? `依頼 ${GAME.asks}件` : '';
+  const env = activeEnv();
+  ask.textContent = [env ? `${env.jp}${env.nodes ? ` · ${env.nodes}ノード` : ''}` : '',
+                     GAME.asks ? `依頼 ${GAME.asks}件` : ''].filter(Boolean).join(' · ');
   elRoles.appendChild(ask);
 }
 
@@ -281,6 +405,30 @@ function renderBuildList(){
     }
     elBuild.appendChild(row);
   });
+}
+
+/* ---- did you clear it, and the one misdiagnosis this scenario is about ---- */
+function renderScenarioReport(){
+  const sc = activeScenario();
+  const st = goalStatus();
+  if(!sc || !st) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'rrep';
+  wrap.innerHTML = `<h5>${st.cleared ? 'cleared' : 'not cleared'}</h5>`;
+  st.items.forEach(i=>{
+    const row = document.createElement('div');
+    row.className = 'rrow ' + (i.ok ? 'clean' : 'blamed');
+    row.style.borderLeftColor = i.ok ? 'var(--lumin)' : 'var(--red-ui)';
+    row.innerHTML = `<span class="rn">${i.ok ? '達成' : '未達'}</span>`+
+                    `<span class="rv">${GOAL_LBL[i.key] ? GOAL_LBL[i.key](i) : i.key}</span>`;
+    wrap.appendChild(row);
+  });
+  const ins = document.createElement('div');
+  ins.className = 'rnote';
+  ins.innerHTML = `<b>踏みがちな読み:</b> ${sc.insight.wrong}<br><b>実際は:</b> ${sc.insight.truth}`;
+  wrap.appendChild(ins);
+  elRes.appendChild(wrap);
 }
 
 /* ---- results, with the role each miss is charged to ---- */
@@ -333,6 +481,7 @@ function renderResults(){
   if(done){
     const v = verdictText();
     if(v) setHint(v.html, v.good);
+    renderScenarioReport();
     renderRoleReport();
   }
   elRun.disabled = !done;
@@ -341,11 +490,30 @@ function renderResults(){
 
 /* ---- the change feed ---- */
 function renderCampaignAll(){
+  renderScenarioPicker();
   renderSides();
   renderRoles();
   renderBuildList();
   applyRoleLocks();
+  syncLeverWidgets();
   renderResults();
+}
+
+/* the situation as the scenario hands it over */
+function showScenario(){
+  const sc = activeScenario();
+  elTitle.textContent = sc ? sc.title
+                       : GAME.role ? roleById(GAME.role).mission : DEFAULT_MISSION;
+  elScore.textContent = '0';
+  elRun.disabled = false;
+  /* who you are goes in the eyebrow, which costs no height. The hint is for the
+     setup only — at 720p every line of prose here is a line the build list or
+     the results give up. */
+  const role = GAME.role ? roleById(GAME.role) : null;
+  if(elEyebrow) elEyebrow.textContent = role ? `mission · ${role.chip}` : 'mission';
+  setHint(sc ? sc.blurb : '', false);
+  renderCampaignAll();
+  fitCampaignPanel();
 }
 
 onCampaignChange(ev=>{
@@ -355,18 +523,24 @@ onCampaignChange(ev=>{
       [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
         b.classList.toggle('on', b.dataset.ui === ev.mode));
       document.getElementById('hint').classList.add('gone');
-      elScore.textContent = '0';
-      elRun.disabled = false;
-      setHint(EMPTY_PLOT, false);
-      elTitle.textContent = GAME.role ? roleById(GAME.role).mission : DEFAULT_MISSION;
-      renderCampaignAll();
+      if(GAME.on) showScenario();
+      /* leaving campaign gives every lever back — the role only binds in play */
+      else { elTitle.textContent = DEFAULT_MISSION;
+             applyRoleLocks(); syncLeverWidgets(); fitCampaignPanel(); }
+      closeDrawer();
+      goHome();
+      break;
+    case 'scenario':
+      showScenario();
       closeDrawer();
       goHome();
       break;
     case 'role': {
       const r = ev.id ? roleById(ev.id) : null;
-      elTitle.textContent = r ? r.mission : DEFAULT_MISSION;
-      setHint(r ? `<b>${r.jp}</b>として参加する。${r.brief}` : EMPTY_PLOT, false);
+      const sc = activeScenario();
+      if(elEyebrow) elEyebrow.textContent = r ? `mission · ${r.chip}` : 'mission';
+      setHint(r ? `<b>${r.jp}</b>として参加する。${r.brief}`
+                : (sc ? sc.blurb : ''), false);
       renderSides(); renderRoles(); renderBuildList(); applyRoleLocks();
       break;
     }

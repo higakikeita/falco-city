@@ -12,10 +12,13 @@
  * possibly catch stay uncaught.
  */
 import { DISTRICTS, byId, isFlow, setCampaignView } from './layout.js';
-import { S, GAME, model } from './state.js';
+import { S, GAME, model, TUNE_DEFAULTS, hasCap } from './state.js';
+import { DEPLOYMENTS } from './districts.data.js';
 import { districtObjs } from './city.js';
 import { polPoints } from './sim.js';
-import { setMode, applyShield } from './controls.js';
+import { setMode, setDeploy, applyShield, onTuneChange } from './controls.js';
+import { SCENARIOS, DEFAULT_SCENARIO_ID, scenarioById, addScenarioError } from './scenarios/index.js';
+import { envOf, deployOf, driverOf, stepsOf } from './scenarios/schema.js';
 
 /* ---------------------------------------------------------------- build graph */
 const DEPS = {
@@ -37,27 +40,55 @@ const UNLOCK = {
   sysdig:'相関と<b>止める手</b>が入った。検知して終わり、ではなくなった。'
 };
 
-/* ---------------------------------------------------------------- attack chain */
-/* Each step names what it needs. `deploy` pins a required topology. */
+/* ---------------------------------------------------------------- attack chain
+   The library of steps an attack can be composed of. A scenario does not invent
+   attacks — it names which of these come, and in which wave. `id` is that handle.
+
+   `needsCaps` names what the deployment has to make observable — the attributes
+   declared on DEPLOYMENTS (districts.data.js), read through hasCap(). Never the
+   name of a topology: pinning `deploy:'k8s'` became wrong the moment `managed`
+   was declared, and it would blame the platform role for a miss the model never
+   caused. The capability is the actual reason. */
+const SYSCALL_PATH = ['driver','ring','state','rules','outputs'];
 const CHAIN = [
-  { jp:'kubectl exec でコンテナにシェルを取る', rule:'Terminal shell in container',
-    needs:['driver','ring','state','rules','outputs'] },
-  { jp:'/etc/shadow を読んで資格情報を探す', rule:'Read sensitive file untrusted',
-    needs:['driver','ring','state','rules','outputs'] },
-  { jp:'/etc/cron.d に書き込んで永続化する', rule:'Write below etc',
-    needs:['driver','ring','state','rules','outputs'] },
-  { jp:'/tmp に落としたバイナリを実行する', rule:'Drop and execute new binary in container',
-    needs:['driver','ring','state','rules','outputs','falcoctl'],
+  { id:'exec', jp:'kubectl exec でコンテナにシェルを取る', rule:'Terminal shell in container',
+    needs:SYSCALL_PATH, needsCaps:['kernelPath'] },
+  { id:'shadow', jp:'/etc/shadow を読んで資格情報を探す', rule:'Read sensitive file untrusted',
+    needs:SYSCALL_PATH, needsCaps:['kernelPath'] },
+  { id:'cron', jp:'/etc/cron.d に書き込んで永続化する', rule:'Write below etc',
+    needs:SYSCALL_PATH, needsCaps:['kernelPath'] },
+  { id:'dropbin', jp:'/tmp に落としたバイナリを実行する', rule:'Drop and execute new binary in container',
+    needs:[...SYSCALL_PATH,'falcoctl'], needsCaps:['kernelPath'],
     why:'この検知は既定で同梱されるルールセットには入っていない。falcoctl でルールを追従させていなければ、そもそも持っていない。' },
-  { jp:'K8s API サーバに接触して権限を探る', rule:'Contact K8S API Server From Container',
-    needs:['driver','ring','state','rules','outputs'], deploy:'k8s',
-    why:'Host 構成には Kubernetes の文脈が無いので、この振る舞いを k8s イベントとして扱えない。' },
-  { jp:'盗んだ資格情報でクラウドへ（MFA 無しログイン → バケットの暗号化を解除）',
+  { id:'k8sapi', jp:'K8s API サーバに接触して権限を探る', rule:'Contact K8S API Server From Container',
+    needs:SYSCALL_PATH, needsCaps:['kernelPath','apiServer'] },
+  { id:'cloud', jp:'盗んだ資格情報でクラウドへ（MFA 無しログイン → バケットの暗号化を解除）',
     rule:'Console Login Without MFA / Delete Bucket Encryption',
     needs:['rules','outputs','plugins'],
-    why:'クラウド API の操作は syscall には一切現れない。プラグイン入力が無ければ<b>原理的に</b>見えない。' }
+    why:'クラウド API の操作は<b>別のイベントソース</b>（<code>aws_cloudtrail</code>）で、'+
+         '<code>ct.*</code> という別のフィールド空間を持つ。<b>Falco はソース間の相関をしない</b>ので、'+
+         'syscall ルールには<b>構造的に</b>マッチし得ない。プラグイン入力を足す以外に道が無い。' }
 ];
-const RESPONSE = { jp:'侵害されたコンテナを止めて封じ込める', rule:'kill / pause container',
+/* Why a missing capability stops a step. Keyed by the capability, so a reason can
+   never drift onto the wrong cause — the bug that told a kernel-less environment
+   its rules were out of date.
+
+   `k8sMeta` is deliberately absent: no detection here requires it, because
+   container and k8s metadata come from the container runtime socket and are
+   orthogonal to how Falco was installed (README §環境の因果). Attributing a miss
+   to the install form would be restating an error the docs disprove. */
+const CAP_WHY = {
+  kernelPath:'この環境にはカーネルからユーザ空間へのリングバッファが無い。'+
+             '<code>syscall</code> ソース自体が消えるわけではないが、'+
+             '<b>カーネル由来のイベントが1件も上がってこない</b>ので、'+
+             'ルールエンジンに届くのはプラグイン入力だけ。',
+  apiServer:'この環境に <b>Kubernetes の API サーバが無い</b>。'+
+            'オーケストレータが居ないので接触する相手が存在せず、この振る舞い自体が起こり得ない。'+
+            '（インストール形態の話ではない — <code>k8saudit</code> は host 導入でも動く）'
+};
+
+const stepById = id => CHAIN.find(s => s.id === id) || null;
+const RESPONSE = { id:'contain', jp:'侵害されたコンテナを止めて封じ込める', rule:'kill / pause container',
   needs:['sysdig'],
   why:'OSS Falco は目。止める手は別のコンポーネント（Sysdig の応答、または Falco Talon）。' };
 
@@ -114,9 +145,11 @@ const LEVER_OWNER = { deploy:'platform', driver:'platform', tuning:'sre', stack:
 const canUseLever = group =>
   !(GAME.on && GAME.role && GAME.role !== LEVER_OWNER[group]);
 
-GAME.role = null;    // null = 全役（one player doing every job）
+GAME.role = null;      // null = 全役（one player doing every job）
+GAME.roleLocked = false;
 GAME.side = 'defense';
 GAME.asks = 0;
+GAME.scenario = null;  // set on entry; there is no play outside a scenario
 
 /* ---------------------------------------------------------------- change feed */
 const listeners = new Set();
@@ -143,6 +176,115 @@ function applyGameVisibility(){
   GAME.frontier = frontier();
 }
 
+/* ---------------------------------------------------------------- scenarios
+   Playtime is made of scenarios, so the engine reads them and holds no case for
+   any particular one — 空き地から建てる is src/scenarios/greenfield.js and gets
+   no more from this file than any other. schema.js is the contract.
+
+   Referential checks live here because this is where the tables are. They run
+   once per scenario, the first time it is started, and land in the same error
+   list the shape check uses. */
+const checked = new Set();
+
+function referentialErrors(sc){
+  const e = [];
+  const ids = stepsOf(sc);
+  ids.forEach(id => { if(!stepById(id)) e.push(`unknown attack step: ${id}`); });
+  if(new Set(ids).size !== ids.length) e.push('an attack step appears in more than one wave');
+
+  if(sc.player.role !== null && !roleById(sc.player.role))
+    e.push(`unknown role: ${sc.player.role}`);
+
+  const built = new Set(['workloads', ...sc.start.built]);
+  for(const id of sc.start.built){
+    if(!DEPS[id]) e.push(`start.built names a district that cannot be built: ${id}`);
+    else for(const dep of DEPS[id])
+      if(!built.has(dep))
+        e.push(`start.built has ${id} without ${dep} — the dependency has to be met`);
+  }
+  if(sc.start.stack === 'sysdig' && !built.has('sysdig'))
+    e.push('start.stack is sysdig but 08 Sysdig Secure is not in start.built');
+  if(sc.goal.detect !== null && sc.goal.detect > ids.length)
+    e.push(`goal.detect ${sc.goal.detect} is above the ${ids.length} step(s) that come`);
+  return e;
+}
+
+function validated(sc){
+  if(checked.has(sc.id)) return true;
+  const errs = referentialErrors(sc);
+  errs.forEach(m => addScenarioError(`${sc.id}: ${m}`));
+  checked.add(sc.id);
+  return errs.length === 0;
+}
+
+const activeScenario = () => GAME.scenario ? scenarioById(GAME.scenario) : null;
+
+/* the resolved environment: the table entry with the scenario's node count
+   applied. Carries its own player-facing name, so no layer above has to keep a
+   second copy of it. */
+function activeEnv(){
+  const sc = activeScenario();
+  return sc ? envOf(sc) : null;
+}
+
+/* the steps that come, in order. Outside a scenario (explore mode, console
+   poking) the whole library comes, which is what it did before scenarios. */
+function activeChain(){
+  const sc = activeScenario();
+  if(!sc) return CHAIN.slice();
+  return stepsOf(sc).map(stepById).filter(Boolean);
+}
+const hasResponse = () => { const sc = activeScenario(); return sc ? sc.attack.response : true; };
+
+/* the topology the current environment is. In a scenario there is exactly one —
+   the environment is not a lever, it is the place you were given — so the DEPLOY
+   buttons for the others are not available while it runs. */
+function allowedDeploys(){
+  const sc = activeScenario();
+  const env = sc && envOf(sc);
+  return env ? [env.deploy] : DEPLOYMENTS.map(d => d.id);
+}
+function allowedDrivers(){
+  const sc = activeScenario();
+  const env = sc && envOf(sc);
+  return env ? env.drivers.slice() : ['modern_ebpf','ebpf','kmod'];
+}
+
+/* Enter a scenario. Everything the player is handed comes from the file: the
+   environment, what is already standing, what was already tuned, which role
+   they are. An empty plot is the case where the file hands over nothing. */
+function startScenario(id){
+  const sc = scenarioById(id);
+  if(!sc){ addScenarioError(`cannot start unknown scenario: ${id}`); return false; }
+  if(!validated(sc)) return false;
+
+  const env = envOf(sc);
+  GAME.scenario = sc.id;
+  GAME.on = true;
+  GAME.built = new Set(['workloads', ...sc.start.built]);
+  GAME.results = null; GAME.reveal = 0; GAME.revealT = 0; GAME.asks = 0;
+  GAME.side = sc.player.side;
+  GAME.role = sc.player.role;
+  GAME.roleLocked = sc.player.lockRole;
+
+  S.env = sc.env.type;
+  S.nodes = env.nodes;
+  S.tune = {...TUNE_DEFAULTS, ...sc.start.tune};
+  S.load = sc.start.load;
+  S.driver = driverOf(sc) || S.driver;
+  S.dead = false; S.deadDrops = 0;
+  S.counters = {sys:0, ring:0, drop:0, rules:0, alerts:0};
+  S.shown    = {sys:0, ring:0, drop:0, rules:0, alerts:0};
+  S.alertWindow = [];
+
+  setMode(sc.start.stack);
+  setDeploy(deployOf(sc));        /* reroutes the particles and calls onTuneChange */
+  applyGameVisibility();
+  applyShield();
+  notify({type:'scenario', id:sc.id});
+  return true;
+}
+
 /* ---------------------------------------------------------------- evaluation
    A pure function of what you built, how you tuned it, and where you deployed. */
 function evaluate(){
@@ -151,23 +293,28 @@ function evaluate(){
   /* a real overload steals one otherwise-detected syscall step */
   let stolen = M.util > 1 && M.dropP > 0.05;
 
-  for(const s of CHAIN){
+  for(const s of activeChain()){
     const missing = s.needs.filter(k => !GAME.built.has(k));
+    const missingCaps = (s.needsCaps || []).filter(c => !hasCap(c));
     let caught = missing.length === 0, why = null;
     if(!caught){
       why = s.why || `まだ建っていない: ${missing.map(m=>byId(m).jp).join(' / ')}`;
-    } else if(s.deploy && S.deploy !== s.deploy){
+    } else if(missingCaps.length){
       caught = false;
-      why = s.why || `この構成（${S.deploy}）では検知できない。`;
+      /* the reason belongs to the capability that is missing, not to the step —
+         otherwise a kernel-less environment gets told its rules are out of date */
+      why = CAP_WHY[missingCaps[0]] || `この構成（${S.deploy}）では検知できない。`;
     } else if(stolen && s.needs.includes('ring')){
       caught = false; stolen = false;
       why = `検知条件は満たしていたのに、<b>リングバッファでドロップした</b>（drain utilisation ${Math.round(M.util*100)}%）。`;
     }
     out.push({...s, caught, why});
   }
-  const rMissing = RESPONSE.needs.filter(k => !GAME.built.has(k));
-  out.push({...RESPONSE, response:true, caught:rMissing.length===0,
-            why: rMissing.length ? RESPONSE.why : null});
+  if(hasResponse()){
+    const rMissing = RESPONSE.needs.filter(k => !GAME.built.has(k));
+    out.push({...RESPONSE, response:true, caught:rMissing.length===0,
+              why: rMissing.length ? RESPONSE.why : null});
+  }
   return out;
 }
 
@@ -181,7 +328,9 @@ function blameOf(r){
     const first = BUILD_ORDER.find(k => missing.includes(k)) || missing[0];
     return OWNER[first] || null;
   }
-  if(r.deploy && S.deploy !== r.deploy) return 'platform';
+  /* the topology is the platform role's call, so a capability the deployment
+     does not have is their miss */
+  if((r.needsCaps || []).some(c => !hasCap(c))) return 'platform';
   return 'sre';   /* everything was built and matched — the ring buffer ate it */
 }
 
@@ -215,11 +364,40 @@ function verdictText(){
   const hit = det.filter(r => r.caught).length;
   const resp = GAME.results.find(r => r.response);
   if(hit === det.length)
-    return { good:true, html: resp.caught
+    return { good:true, html: !resp
+      ? '<b>この環境で成立する全段を検知した。</b>'
+      : resp.caught
       ? '<b>全段検知＋封じ込め。</b>目と手が揃った状態がこれ。'
       : '<b>全段検知。ただし止められていない。</b>検知と応答は別の部品。' };
   return { good:false,
     html:`<b>${det.length-hit} 段を見逃した。</b>各行の理由が、その部品が存在する理由。` };
+}
+
+/* Did you clear the scenario. The thresholds are the scenario's, the arithmetic
+   is here, and the labels are ui.js's — this returns keys and numbers so that
+   no player-facing sentence has to live in the rules layer. */
+function goalStatus(){
+  const sc = activeScenario();
+  if(!sc || !GAME.results || GAME.reveal < GAME.results.length) return null;
+  const g = sc.goal;
+  const det = GAME.results.filter(r => !r.response);
+  const hit = det.filter(r => r.caught).length;
+  const resp = GAME.results.find(r => r.response);
+  const dropPct = model().dropP * 100;
+  const items = [];
+
+  if(g.detect !== null)
+    items.push({key:'detect', target:g.detect, actual:hit, of:det.length, ok:hit >= g.detect});
+  if(g.contain)
+    items.push({key:'contain', target:1, actual:resp && resp.caught ? 1 : 0,
+                ok:!!(resp && resp.caught)});
+  if(g.maxAsks !== null)
+    items.push({key:'asks', target:g.maxAsks, actual:GAME.asks, ok:GAME.asks <= g.maxAsks});
+  if(g.maxDropPct !== null)
+    items.push({key:'drop', target:g.maxDropPct, actual:Math.round(dropPct*100)/100,
+                ok:dropPct <= g.maxDropPct});
+
+  return { items, cleared: items.every(i => i.ok) };
 }
 const score = () => (GAME.results && GAME.reveal)
   ? GAME.results.filter(r => !r.response && r.caught).length : 0;
@@ -263,9 +441,12 @@ function tickReveal(dt){
   notify({type:'reveal', done: GAME.reveal >= GAME.results.length});
 }
 
+/* a scenario may fix the role, and then this is not yours to change */
 function setRole(id){
+  if(GAME.roleLocked) return false;
   GAME.role = id;
   notify({type:'role', id});
+  return true;
 }
 
 function setSide(id){
@@ -280,17 +461,13 @@ function setUiMode(m){
   GAME.on = m === 'campaign';
   setCampaignView(GAME.on);
   if(GAME.on){
-    GAME.built = new Set(['workloads']);
-    GAME.results = null; GAME.reveal = 0; GAME.asks = 0;
-    S.counters = {sys:0, ring:0, drop:0, rules:0, alerts:0};
-    S.shown    = {sys:0, ring:0, drop:0, rules:0, alerts:0};
-    S.alertWindow = [];
-    setMode('oss');
+    /* whatever the situation is, it comes from a scenario file */
+    startScenario(GAME.scenario || DEFAULT_SCENARIO_ID);
   } else {
     GAME.built = new Set(DISTRICTS.map(d => d.id));
+    applyGameVisibility();
+    applyShield();
   }
-  applyGameVisibility();
-  applyShield();
   notify({type:'mode', mode:m});
 }
 
@@ -300,7 +477,18 @@ export {
   BUILD_ORDER,
   UNLOCK,
   CHAIN,
+  stepById,
   RESPONSE,
+  SCENARIOS,
+  DEFAULT_SCENARIO_ID,
+  scenarioById,
+  activeScenario,
+  activeEnv,
+  activeChain,
+  startScenario,
+  allowedDeploys,
+  allowedDrivers,
+  goalStatus,
   SIDES,
   sideById,
   ROLES,

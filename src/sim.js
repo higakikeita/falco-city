@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { byId, ST } from './layout.js';
-import { S, GAME, model, KERNEL_PASS, MATCH_RATE, SET_MUL } from './state.js';
+import { S, GAME, model, KERNEL_PASS, MATCH_RATE, SET_MUL, hasCap } from './state.js';
 import { RING_LANES, OUT_PIPES } from './districts.build.js';
 import { scene } from './scene.js';
 import { emitLog, onDrop } from './log.js';
@@ -41,9 +41,12 @@ function spawn(i, delay=0){
   p.prio = 0;
   /* per-pass gates — MUST be reset, particles are recycled */
   p.gated = false; p.dropRolled = false; p.enriched = false; p.rolled = false;
-  /* kernel-less: every event comes in through a plugin */
+  /* with no kernel path there is nothing to carry a syscall up, so every event
+     that arrives came in through a plugin. Read the declared attribute rather
+     than the topology's name — the name stops being the reason as soon as a
+     second topology shares it. */
   const pluginsUp = !GAME.on || GAME.built.has('plugins');
-  p.plugin = pluginsUp && (S.deploy === 'plugins' ? true : Math.random() < 0.03);
+  p.plugin = pluginsUp && (!hasCap('kernelPath') || Math.random() < 0.03);
   if(p.plugin){
     p.x = ST.pluginX; p.z0 = ST.pluginZ + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
     /* plugin inputs bypass driver + ring buffer entirely */
