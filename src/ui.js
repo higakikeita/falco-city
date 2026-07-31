@@ -872,39 +872,78 @@ function renderGoal(){
 }
 
 /* ============================================================
-   §debrief — the answer check, in a box big enough to read it
+   §page — the full-page shell, and the debrief that lives in it
    ------------------------------------------------------------
-   See the markup note in index.html for why this is not in the panel. The rule
-   about WHEN each thing appears:
-     always      cleared / not cleared, and every goal row with its numbers
-     on a clear  the misdiagnosis (insight.wrong / insight.truth) and the grade
-   The insight is the answer to the question the scenario asked, so it is a
-   reward for having answered it — not something the game says on the way in,
-   which is what the HUD verdict used to do.
-   ============================================================ */
-const elDebrief = document.getElementById('debrief');
-const elDbCard  = document.getElementById('dbCard');
-const elDbTitle = document.getElementById('dbTitle');
-const elDbStamp = document.getElementById('dbStamp');
-const elDbEyeb  = document.getElementById('dbEyebrow');
-const elDbBody  = document.getElementById('dbBody');
-const elDbNext  = document.getElementById('dbNext');
-const elDbNote  = document.getElementById('dbNote');
+   See the markup note in index.html. What changed and why:
 
-function hideDebrief(){ if(elDebrief) elDebrief.classList.remove('show'); }
+   The debrief was an overlay card because the panel could not hold it. Pages may
+   now be as large as they need (GAME-DESIGN §5.5), so it is a page — opaque,
+   860px of measure, and it scrolls as a page rather than as a 78px window.
+
+   openPage() / closePage() are deliberately generic. The setup pages coming next
+   are the same header, body and footer with different content, and the reason
+   this is a shell is that otherwise each of them invents its own.
+
+   The rule about WHEN each part appears has not changed:
+     always      cleared / not cleared, every goal row with its numbers, and what
+                 got past you — the not-cleared case needs something to act on
+     on a clear  the misdiagnosis (insight.wrong / insight.truth) and the grade
+   The insight is the answer to the question the scenario asked, so it is a reward
+   for having answered it, not something the game says on the way in.
+   ============================================================ */
+const elPage  = document.getElementById('page');
+const elPgKick  = document.getElementById('pgKick');
+const elPgStep  = document.getElementById('pgStep');
+const elPgTitle = document.getElementById('pgTitle');
+const elPgStamp = document.getElementById('pgStamp');
+const elPgBody  = document.getElementById('pgBody');
+const elPgNext  = document.getElementById('pgNext');
+const elPgAgain = document.getElementById('pgAgain');
+const elPgNote  = document.getElementById('pgNote');
+const elToDebrief = document.getElementById('toDebrief');
+
+/* which page is open, so the feed knows whether to redraw it */
+let pageOpen = null;
+
+function closePage(){
+  pageOpen = null;
+  if(elPage) elPage.classList.remove('show');
+}
+function openPage(name){
+  if(!elPage) return;
+  pageOpen = name;
+  elPage.classList.add('show');
+  elPage.scrollTop = 0;      /* a page always opens at its top */
+}
+
+/* one wordmark asset in the document, cloned rather than duplicated — same
+   discipline menu.js uses for the entrance cards */
+if(elPage){
+  const mark = document.querySelector('.brandbar svg');
+  const head = elPage.querySelector('.pghead');
+  if(mark && head) head.insertBefore(mark.cloneNode(true), head.firstChild);
+}
+
+/* ---- the debrief ---------------------------------------------------------- */
+function hideDebrief(){ if(pageOpen === 'debrief') closePage(); }
 
 function renderDebrief(){
-  if(!elDebrief || !elDebrief.classList.contains('show')) return;
+  if(pageOpen !== 'debrief') return;
   const sc = activeScenario(), st = goalStatus();
-  if(!sc || !st){ hideDebrief(); return; }
+  if(!sc || !st){ closePage(); return; }
 
-  elDbEyeb.textContent = `debrief · 試行 ${GAME.runs}回目`;
-  elDbTitle.textContent = sc.title;
-  elDbStamp.className = 'dbstamp ' + (st.cleared ? 'win' : 'lose');
-  elDbStamp.textContent = st.cleared ? 'クリア' : '未クリア';
+  elPgKick.textContent = 'debrief';
+  elPgStep.textContent = `試行 ${GAME.runs} 回目 · ${activeWaves().length} 波`;
+  elPgTitle.innerHTML = st.cleared
+    ? `<b>${sc.title}</b> を通した。`
+    : `<b>${sc.title}</b> は、まだ通っていない。`;
+  elPgStamp.className = 'pgstamp ' + (st.cleared ? 'win' : 'lose');
+  elPgStamp.textContent = st.cleared ? 'クリア' : '未クリア';
 
   const html = [];
-  html.push('<div class="dbsec">この回の採点</div>');
+
+  html.push('<div class="pgsec">この回の採点</div>');
+  html.push('<div class="pggrid">');
   for(const i of st.items){
     const txt = GOAL_LBL[i.key] ? GOAL_LBL[i.key](i) : i.key;
     html.push(`<div class="rrow ${i.ok ? 'clean' : 'blamed'}"`
@@ -912,24 +951,27 @@ function renderDebrief(){
       + `<span class="rn">${i.ok ? '達成' : '未達'}</span>`
       + `<span class="rv">${txt}</span></div>`);
   }
+  html.push('</div>');
 
-  /* what got past you, so the not-cleared case has something to act on */
+  /* what got past you. On a page this can say the whole reason, which is the
+     part the 81px window was eating. */
   const missed = passResults().filter(r => !r.caught);
   if(missed.length){
-    html.push('<div class="dbsec">抜けた段</div>');
+    html.push(`<div class="pgsec">抜けた ${missed.length} 段 — なぜ抜けたか</div>`);
     for(const r of missed){
       const b = roleById(r.blame);
-      html.push(`<div class="dbline"><b>${r.jp}</b>`
-        + (r.why ? ` — ${r.why}` : '')
-        + (b ? `<br><span style="color:var(--grey-30)">起因 · ${b.jp}</span>` : '')
+      html.push('<div class="pgmiss">'
+        + `<b>${r.jp}</b>${r.rule ? ` <span style="color:var(--grey-30)">${r.rule}</span>` : ''}`
+        + (r.why ? `<br>${r.why}` : '')
+        + (b ? `<span class="who">起因 · ${b.jp}</span>` : '')
         + '</div>');
     }
   }
 
   /* THE PAYLOAD — only once it has been earned */
   if(st.cleared && sc.insight){
-    html.push('<div class="dbsec">この現場が誘う誤診</div>');
-    html.push('<div class="dbins">'
+    html.push('<div class="pgsec">この現場が誘う誤診</div>');
+    html.push('<div class="pgins">'
       + `<span class="q"><span class="lbl">踏みがちな読み</span>${sc.insight.wrong}</span>`
       + `<span class="lbl">実際は</span>${sc.insight.truth}</div>`);
   }
@@ -938,45 +980,58 @@ function renderDebrief(){
     const b = bestNote.best;
     const head = bestNote.first ? '初クリア'
                : bestNote.improved ? '自己ベスト更新' : '自己ベスト';
-    html.push('<div class="dbsec">記録</div>');
+    html.push('<div class="pgsec">記録</div>');
     html.push(`<div class="rrow ${bestNote.improved ? 'clean' : ''}"`
       + ` style="border-left-color:${bestNote.improved ? 'var(--lumin)' : 'var(--grey-20)'}">`
       + `<span class="rn">${head}</span>`
       + `<span class="rv">検知 ${b.detect}/${b.of} · 依頼 ${b.asks}件 · ${b.attempts}回目`
       + `${b.clears > 1 ? ` · ${b.clears}回クリア` : ''}</span></div>`);
   }
-  elDbBody.innerHTML = html.join('');
 
-  /* one click onward — the campaign had no "next" at all before this */
+  /* V5 — why the score moved — plugs in HERE, as its own section, once score.js
+     exists. It is not stubbed: an empty "点の内訳" heading would be a promise the
+     game cannot keep yet. The shape this needs is on BOARD as #S5. */
+
+  elPgBody.innerHTML = html.join('');
+
+  /* one click onward. `もう一度流す` is the other half: a not-cleared pass has to
+     be able to leave this page straight into another attempt. */
   const p = progressSummary(scenarioOrder());
   const nx = st.cleared && p.next ? SCENARIOS.find(s => s.id === p.next) : null;
-  elDbNext.hidden = !nx;
+  elPgNext.hidden = !nx;
   if(nx){
-    elDbNext.textContent = `次へ — ${nx.title} →`;
-    elDbNext.onclick = ()=>{ hideDebrief(); startScenario(nx.id); };
+    elPgNext.textContent = `次へ — ${nx.title} →`;
+    elPgNext.onclick = ()=>{ closePage(); startScenario(nx.id); };
   }
-  elDbNote.innerHTML = st.cleared
+  elPgAgain.hidden = !!nx;
+  elPgAgain.onclick = ()=>{ closePage(); runAttack(); };
+
+  elPgNote.innerHTML = st.cleared
     ? `${p.total} 本中 ${p.cleared} 本クリア`
       + (p.complete ? '<br>全シナリオ制覇' : '')
       + (storageOk() ? '' : '<br>この環境では保存されません')
     : 'もう一度流すと試行が1回増えます';
-  elDbCard.scrollTop = 0;
 }
 
 function showDebrief(){
-  if(!elDebrief || !goalStatus()) return;
-  elDebrief.classList.add('show');
+  if(!elPage || !goalStatus()) return;
+  openPage('debrief');
   renderDebrief();
 }
 
-if(elDebrief){
-  document.getElementById('dbClose').onclick = hideDebrief;
-  /* the backdrop closes it; the card does not */
-  elDebrief.addEventListener('click', ev => { if(ev.target === elDebrief) hideDebrief(); });
+/* the debrief survives being closed: the insight is the thing worth going back
+   for, and losing it to one stray click was the old overlay's real cost */
+function syncDebriefEntry(){
+  if(elToDebrief) elToDebrief.disabled = !goalStatus();
+}
+if(elToDebrief) elToDebrief.onclick = showDebrief;
+
+if(elPage){
+  document.getElementById('pgClose').onclick = closePage;
   addEventListener('keydown', ev => {
-    if(ev.key === 'Escape' && elDebrief.classList.contains('show')){
+    if(ev.key === 'Escape' && pageOpen){
       ev.stopPropagation();
-      hideDebrief();
+      closePage();
     }
   }, true);
 }
@@ -1018,11 +1073,12 @@ onCampaignChange(ev=>{
     case 'mode':
       bestNote = null;
       hideDebrief();
+      syncDebriefEntry();
       /* the console is evidence about the situation you are in — carrying the
          last one's lines across makes the new premise false on arrival */
       resetLog();
       elCmp.classList.toggle('on', GAME.on);
-      [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
+      [...document.querySelectorAll('#uiModeSeg button[data-ui]')].forEach(b=>
         b.classList.toggle('on', b.dataset.ui === ev.mode));
       document.getElementById('hint').classList.add('gone');
       resetHudBaseline();
@@ -1036,6 +1092,7 @@ onCampaignChange(ev=>{
     case 'scenario':
       bestNote = null;
       hideDebrief();
+      syncDebriefEntry();
       resetLog();
       resetHudBaseline();
       showScenario();
@@ -1077,6 +1134,7 @@ onCampaignChange(ev=>{
       bestNote = null;
       renderResults();
       renderGoal();
+      syncDebriefEntry();
       break;
     case 'reveal':
       if(ev.done) captureBest();
@@ -1090,12 +1148,13 @@ onCampaignChange(ev=>{
        earned the answer to the question the scenario asked. */
     case 'over':
       renderGoal();
+      syncDebriefEntry();
       showDebrief();
       break;
   }
 });
 
-document.querySelectorAll('#uiModeSeg button').forEach(b=>
+document.querySelectorAll('#uiModeSeg button[data-ui]').forEach(b=>
   b.onclick = ()=> setUiMode(b.dataset.ui));
 elRun.onclick = runAttack;
 
