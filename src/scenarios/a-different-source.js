@@ -21,7 +21,7 @@
 export default {
   id:'a-different-source',
   title:'syscall を増やしても見えない',
-  order:90,
+  order: 60,
   blurb:'syscall 経路は全段建っていて、ドロップは <b>0%</b>。ルールも falcoctl で追従している。'+
         'それでも <b>クラウド側の侵害だけ</b>が1段も鳴らない。',
 

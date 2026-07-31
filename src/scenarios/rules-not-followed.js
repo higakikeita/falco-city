@@ -15,7 +15,7 @@
 export default {
   id:'rules-not-followed',
   title:'持っていないルール',
-  order:44,
+  order: 40,
   blurb:'流れの全段が建っている。ドロップ 0%、アラートも届いている。それでも '+
         '<code>/tmp</code> のバイナリ実行だけが鳴らない。'+
         '前任のメモには「ルールは最新」とある。',
