@@ -134,6 +134,45 @@ when(drv, 'legacy eBPF は Falco では版で消え、Sysdig では日付で消�
        + `Sysdig: 日付で消える（${byDate.map(d => `${d.id} → ${d.retiredOn}`).join(' / ')}）· 混在なし`;
 });
 
+/* The Sysdig retirement date was taught as a FALCO fact in archetypes.js, in two
+   places, before anybody checked (PM's correction, 2026-07-31). Nothing broke —
+   the model just quietly taught the wrong thing, which is the failure mode this
+   whole register exists for. So the date is checked for its OWNER wherever it
+   appears in any landed data module, not just in versions.js. */
+G('帰属の誤り (§10.2 / §10.3)');
+const anyMod = {ok: Object.values(mods).some(m => m && !m.__error),
+                why: 'データ層のモジュールが1つも未着地', m: mods};
+when(anyMod, 'Sysdig の廃止日が Falco のものとして書かれていない', () => {
+  const hits = [];
+  /* どのモジュールでも、2026-12-04 を含むオブジェクトが falco の持ち物として
+     宣言されていたら誤り */
+  const walk = (v, path, mod, owner) => {
+    if(v === null || typeof v !== 'object') return;
+    if(Array.isArray(v)){ v.forEach((x, i) => walk(x, `${path}[${i}]`, mod, owner)); return; }
+    const own = v.line || v.owner || owner;
+    const leaves = Object.entries(v).filter(([, x]) => typeof x === 'string');
+    if(leaves.some(([, x]) => x.includes(SYSDIG_LEGACY_EBPF_RETIRED_ON))
+       && String(own).toLowerCase().includes('falco'))
+      hits.push(`${mod}: ${path} が ${SYSDIG_LEGACY_EBPF_RETIRED_ON} を line/owner=${own} で持っている`);
+    /* 本文に日付を書いていて、同じ本文が Falco を名指ししている場合も疑う */
+    for(const [k, x] of leaves)
+      if(x.includes(SYSDIG_LEGACY_EBPF_RETIRED_ON) && /Falco/.test(x)
+         && !/Sysdig/.test(x))
+        hits.push(`${mod}: ${path}.${k} が ${SYSDIG_LEGACY_EBPF_RETIRED_ON} を Falco の話として書いている`);
+    for(const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`, mod, own);
+  };
+  let scanned = 0;
+  for(const [name, m] of Object.entries(mods)){
+    if(!m || m.__error) continue;
+    scanned++;
+    for(const [key, value] of Object.entries(m))
+      if(value !== null && typeof value === 'object') walk(value, key, name, null);
+  }
+  assert(hits.length === 0, hits.join(' / '));
+  return `${scanned} モジュールを走査 · ${SYSDIG_LEGACY_EBPF_RETIRED_ON} は Sysdig のものとしてのみ出現`
+       + `（Falco 側の締切は版 ${FALCO_LEGACY_EBPF_REMOVED_IN}）`;
+});
+
 const plg = need('versions', 'PLUGINS');
 when(plg, 'k8smeta の下限は2段ある（§10.4）', m => {
   const list = Array.isArray(m.PLUGINS) ? m.PLUGINS : Object.values(m.PLUGINS || {});
@@ -301,8 +340,14 @@ const led = need('score', 'newLedger', 'tickLedger', 'isBust', 'GUARD_DEFAULTS')
 when(led, '塞がずに溜め込むと、いつか点が尽きる', m => {
   /* 完全に守れているが脆弱性を1件も塞がない estate。加算は最大、減算は
      「放置している件数 × tick」。**時間の側が必ず勝つこと**が主張。 */
-  const run = (vulnsPerTick, ticks) => {
-    let l = m.newLedger({start:1000});
+  /* HORIZON は「いつか」を確かめるための上限で、主張ではありません。**定数を
+     固定しないこと** —— 釣り合いはプレイテスト待ちなので（PM）、ここが「N tick で
+     破産する」を assert すると調整のたびに赤くなって消されます。固定するのは
+     ①いつか尽きる ②速く溜めれば早く尽きる ③塞げば尽きない の3つの向きだけ。 */
+  const HORIZON = 5000;
+  const START = 1000;
+  const run = (vulnsPerTick, ticks = HORIZON) => {
+    let l = m.newLedger({start:START});
     const open = [];
     for(let t = 1; t <= ticks; t++){
       for(let k = 0; k < vulnsPerTick; k++) open.push({id:`v${t}-${k}`, since:t});
@@ -311,25 +356,28 @@ when(led, '塞がずに溜め込むと、いつか点が尽きる', m => {
     }
     return {bust:false, t:ticks, points:l.points, open:open.length};
   };
-  /* 何も塞がなければ詰む */
-  const hoard = run(1, 200);
+  /* ① 何も塞がなければ、いつか詰む */
+  const hoard = run(1);
   assert(hoard.bust,
-    `脆弱性を 200 tick 溜め込んでも点が残っている（${hoard.points}）`
+    `脆弱性を ${HORIZON} tick 溜め込んでも点が残っている（${hoard.points}）`
     + ' —— 溜め込みに時間の圧が掛かっていない。これが無いとゲームになりません');
-  /* 溜め込む速さが上がれば、詰むのは早くなる（単調） */
-  const fast = run(3, 200);
+  /* ② 溜め込む速さが上がれば、詰むのは早くなる */
+  const fast = run(3);
   assert(fast.bust && fast.t < hoard.t,
     `溜め込む速さを3倍にしても詰むのが早くならない（${hoard.t} tick → ${fast.t} tick）`);
-  /* そして塞ぎ続ければ詰まない —— 詰みが「時間そのもの」ではなく「放置」に
-     由来していることの対偶。ここが逆だと、何をしても負けるゲームになります */
-  let clean = m.newLedger({start:1000});
-  for(let t = 1; t <= 200; t++) clean = m.tickLedger(clean, {...m.GUARD_DEFAULTS}, {tick:t});
+  /* ③ 塞ぎ続ければ詰まない —— 詰みが「時間そのもの」ではなく「放置」に由来して
+     いることの対偶。ここが逆だと、何をしても負けるゲームになります。
+     溜め込みが尽きるまでより長く回すこと（短く回して「詰まなかった」は無意味） */
+  const cleanTicks = Math.max(hoard.t * 2, 50);
+  let clean = m.newLedger({start:START});
+  for(let t = 1; t <= cleanTicks; t++) clean = m.tickLedger(clean, {...m.GUARD_DEFAULTS}, {tick:t});
   assert(!m.isBust(clean),
-    `1件も溜め込んでいないのに ${200} tick で詰んだ（${clean.points}）`
+    `1件も溜め込んでいないのに ${cleanTicks} tick で詰んだ（${clean.points}）`
     + ' —— 詰みの原因が放置ではなく時間そのものになっている');
-  assert(clean.points > 1000, `守り切っても点が増えない（1000 → ${clean.points}）`);
+  assert(clean.points > START, `守り切っても点が増えない（${START} → ${clean.points}）`);
   return `1件/tick で ${hoard.t} tick で尽きる（未対応 ${hoard.open} 件）· `
-       + `3件/tick なら ${fast.t} tick · 塞ぎ続ければ 200 tick 後 ${clean.points} 点で健在`;
+       + `3件/tick なら ${fast.t} tick · 塞ぎ続ければ ${cleanTicks} tick 後 ${clean.points} 点で健在`
+       + `（tick 数は参考値・固定していない）`;
 });
 
 /* ------------------------------------------------------------------ *
@@ -371,6 +419,10 @@ when(cmp, '同じシードなら同じキャンペーンが出る（F5）', m =>
 });
 
 when(cmp, '生成された攻撃には必ず打つ手がある（F6）', m => {
+  /* F6 の読みは「**打つ手が存在する**」で、「満点に到達できる」ではありません
+     （PM 確認済み・2026-07-31）。`unanswerable === 0` を要求すると、パッチの出せない
+     OT 機材に偽のパッチ経路を強制することになり、製造業の教訓そのもの
+     （塞げない負債が積み上がる）を模型から消してしまいます。 */
   const posture = {caps:['kernelPath','apiServer']};
   const bad = [];
   for(let seed = 1; seed <= 40; seed++){
@@ -385,7 +437,20 @@ when(cmp, '生成された攻撃には必ず打つ手がある（F6）', m => {
   }
   assert(bad.length === 0, bad.slice(0, 5).join(' / ')
     + (bad.length > 5 ? ` …他 ${bad.length-5} 件` : ''));
-  return `40 シード × 3 時点 = 120 通りすべて、監査が公平と判定`;
+  /* そして読みそのものを固定する: 塞げない段が混じっていても、それだけで
+     「理不尽」にはならないこと。ここが厳しい読みに戻ると、OT の教訓が消えます */
+  let withUnanswerable = 0, stillFair = 0;
+  for(let seed = 1; seed <= 40; seed++){
+    const camp = m.generateCampaign({chain:FAKE_CHAIN, tick:20, seed, posture});
+    const audit = m.auditCampaign(camp, posture, {chain:FAKE_CHAIN});
+    const un = audit && (audit.unanswerable ?? (audit.unanswerableSteps || []).length);
+    if(un > 0){ withUnanswerable++; if(audit.fair !== false) stillFair++; }
+  }
+  assert(withUnanswerable === stillFair,
+    `打つ手の無い段を含むキャンペーン ${withUnanswerable} 件のうち ${withUnanswerable - stillFair} 件が`
+    + '「理不尽」と判定された —— F6 は「打つ手が存在する」を問い、「満点に到達できる」は問いません');
+  return `40 シード × 3 時点 = 120 通りすべて、監査が公平と判定`
+       + `（うち塞げない段を含むもの ${withUnanswerable} 件 — それでも公平の読みを維持）`;
 });
 
 /* ------------------------------------------------------------------ *
