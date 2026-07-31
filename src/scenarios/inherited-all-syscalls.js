@@ -7,7 +7,12 @@
 export default {
   id:'inherited-all-syscalls',
   title:'前任者の falco.yaml',
-  order:20,
+  /* the first scenario where the HUD says something, and the first drop scenario.
+     It used to sit at 20 and it was measured as the most laborious of all of them
+     (one tuning change plus three asks), which made the curve run downhill from
+     scenario 2 onwards. It belongs here instead: the three asks only make sense
+     once the player knows what 07 / 08 / 09 are, which is what 20–40 taught. */
+  order:50,
   blurb:'syscall 経路は既に建っている。ただし <code>base_syscalls: all</code> で置いていかれた。'+
         'ドロップが出ているが、ルールは自分では触れない。',
 

@@ -31,13 +31,34 @@
  * Also exposed as `window.__menu` for driving from a test harness.
  */
 import { SIDES, ROLES, BUILD_ORDER, CHAIN, GAME, canBuild,
-         setSide, setRole, setUiMode, onCampaignChange } from './campaign.js';
+         setSide, setRole, setUiMode, onCampaignChange,
+         SCENARIOS, startScenario } from './campaign.js';
 import { byId } from './layout.js';
+import { hasSeen, markSeen, progressSummary, unlockedIds, isCleared,
+         storageOk } from './save.js';
 
 
 /* ---------------------------------------------------------------- prefs
    One key, versioned, and every access guarded: `file://` origins are allowed
-   to throw on localStorage and this must not take the page down with it. */
+   to throw on localStorage and this must not take the page down with it.
+
+   WHAT THIS KEY IS AND IS NOT. It holds the *restore point* — which side, which
+   role, which mode you were last in — and nothing else. It used to also hold
+   `seen`, "has the title screen been sat through once", and save.js grew a
+   `seen.title` for the same fact. Two writers for one fact is a bug waiting for
+   a load order: whichever module read second would win, and the title would
+   start flickering back on. So that one fact moved OUT of here and into save.js,
+   and this file no longer reads or writes it.
+
+   save.js won rather than this key, for three reasons:
+     - it is the module built for progress flags: one versioned record, every
+       touch guarded, and a documented in-memory fallback so a private-mode
+       session still remembers the skip for the rest of the session — where this
+       key silently forgets it on the very next read;
+     - resetProgress() should bring the title back. With the flag out here,
+       wiping your progress left the front door still suppressed;
+     - its own header already nominates hasSeen('title') for this lane.
+   A legacy `seen` is migrated across once, in initMenu(), and then ignored. */
 const LS_KEY = 'falco-city.menu.v1';
 
 function menuPrefs(){
@@ -50,12 +71,21 @@ function menuPrefs(){
 }
 function savePrefs(patch){
   try{
-    localStorage.setItem(LS_KEY, JSON.stringify({...(menuPrefs() || {}), ...patch}));
+    /* `seen` is save.js's now; drop it on the way past so the old field cannot
+       linger and look like it still means something */
+    const {seen, ...keep} = (menuPrefs() || {});
+    localStorage.setItem(LS_KEY, JSON.stringify({...keep, ...patch}));
   }catch(err){ /* private mode, or a file:// origin that refuses storage */ }
 }
 function forgetMenu(){
   try{ localStorage.removeItem(LS_KEY); }catch(err){}
+  markSeen('title', false);      /* the same forgetting, in the module that owns it */
 }
+
+/* the ordered id list save.js takes as an argument — it imports nothing, so the
+   order of the ladder is passed in rather than looked up */
+const scenarioOrder = () => SCENARIOS.map(s => s.id);
+const scenarioTitle = id => (SCENARIOS.find(s => s.id === id) || {}).title || '';
 
 /* a saved role only counts if the role layer still has it */
 const knownRole = id => id === null || ROLES.some(r => r.id === id);
@@ -101,6 +131,36 @@ const CSS = `
   text-transform:uppercase;background:var(--grey-10);color:var(--grey-50);
   padding:6px 12px;border-radius:7px;white-space:nowrap}
 #menu .beats i{font-style:normal;color:var(--grey-25);font-size:11px}
+
+/* ---- §continue: the campaign you already have ----------------------------
+   It rides on the beats row rather than getting one of its own. The title card
+   is already the tallest thing the game draws and at the supported minimum of
+   1280x720 it is within ~30px of the viewport — a new row here would push the
+   side cards under the fold, which is where the only button a first-time player
+   needs happens to live. That row has ~550px spare, so this costs no height. */
+#menu .beats .prog{display:flex;align-items:center;gap:10px;margin-left:auto}
+#menu .beats .prog[hidden]{display:none}
+#menu .beats .dots{display:flex;gap:3px}
+#menu .beats .dots i{display:block;width:9px;height:9px;border-radius:50%;
+  background:var(--grey-10);border:1px solid var(--grey-20);font-style:normal}
+/* three states, because "cleared", "you may play this" and "not open yet" are
+   three different answers and the ladder is the whole point of the save */
+#menu .beats .dots i.open{background:var(--white);border-color:var(--grey-40)}
+#menu .beats .dots i.done{background:var(--lumin);border-color:#5C9A2E}
+#menu .beats .ptxt{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-40);
+  letter-spacing:.07em;white-space:nowrap}
+#menu .beats .resume{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;border:0;background:var(--black);color:#fff;
+  padding:8px 14px;border-radius:8px;cursor:pointer;transition:.16s;white-space:nowrap}
+#menu .beats .resume:hover{background:var(--grey-60)}
+
+/* the environments that refuse localStorage. A notice, not an error: save.js
+   keeps the record in memory, so the only thing lost is outliving the tab. */
+#menu .foot .nosave{font-size:11.5px;line-height:1.7;color:var(--grey-50);
+  background:rgba(255,169,64,.13);border-left:2px solid var(--orange);
+  border-radius:7px;padding:8px 11px;flex:1 1 300px;min-width:240px}
+#menu .foot .nosave[hidden]{display:none}
+#menu .foot .nosave b{color:var(--grey-70);font-weight:600}
 
 /* ---- side pick ---- */
 #menu .sides{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px}
@@ -246,7 +306,13 @@ function titleHtml(){
        建てていない段の攻撃は、運が悪いのではなく<b>原理として</b>見逃します。
        見逃した行には、必ずその理由が付きます。</p>
      <div class="beats"><span>建てる</span><i>→</i><span>迎え撃つ</span><i>→</i>
-       <span>見逃した理由を直す</span></div>
+       <span>見逃した理由を直す</span>
+       <!-- filled by renderProgress(); hidden until there is progress to show -->
+       <div class="prog" id="mProg" hidden>
+         <div class="dots" id="mDots"></div>
+         <div class="ptxt" id="mProgTxt"></div>
+         <button class="resume" id="mResume">続きから</button>
+       </div></div>
 
      <div class="sides">
        <button class="side" id="mSideDef">
@@ -274,6 +340,7 @@ function titleHtml(){
      <div class="foot">
        <button class="ghost" id="mExplore">Explore — 都市を歩いて仕組みを読む</button>
        <button class="ghost" id="mSkipNext">次回からタイトルを出さない</button>
+       <div class="nosave" id="mNoSave" hidden>この環境では<b>進行を保存できません</b>（プライベートモードなど）。クリアと解放はこのタブを開いているあいだ有効なので、<b>遊ぶことはできます</b>。失われるのはタブを閉じたときだけです。</div>
        <span class="note">1280×720 以上 · 日本語 · 攻撃側は未実装</span>
      </div>`;
 }
@@ -325,6 +392,9 @@ function openCard(which){
   cardTitle.classList.toggle('on', which === 'title');
   cardRoles.classList.toggle('on', which === 'roles');
   el.classList.add('show');
+  /* the title is reachable at any time from ↩ タイトル, so the progress on it is
+     redrawn on every open rather than once at build time */
+  if(which === 'title') renderProgress();
 }
 function showTitle(){ openCard('title'); }
 function showRoles(){ openCard('roles'); }
@@ -335,6 +405,45 @@ function markRoles(){
     btn.classList.toggle('on', btn.dataset.role === picked));
 }
 
+/* ---------------------------------------------------------------- §continue
+   Which scenario "continue" means is not stored anywhere: it is derived from the
+   progress by save.js, so it cannot disagree with what the picker will let you
+   choose. `next` is the first unlocked scenario you have not cleared. */
+function resumeId(){
+  const ids = scenarioOrder();
+  if(!ids.length) return null;
+  const p = progressSummary(ids);
+  /* nothing left to continue into — offer the first one again */
+  return (p.complete ? ids[0] : p.next) || ids[0];
+}
+
+function renderProgress(){
+  const nosave = cardTitle.querySelector('#mNoSave');
+  if(nosave) nosave.hidden = storageOk();
+
+  const prog = cardTitle.querySelector('#mProg');
+  if(!prog) return;
+  const ids = scenarioOrder();
+  const p = progressSummary(ids);
+  /* A first-time player has no campaign to continue, and "0/6 クリア" on the
+     front door is noise on the one screen whose job is to get them to press one
+     button. So this whole strip only exists once there is something in it. */
+  prog.hidden = p.cleared === 0;
+  if(prog.hidden) return;
+
+  const open = unlockedIds(ids);
+  prog.querySelector('#mDots').innerHTML = ids.map(id =>
+    `<i class="${isCleared(id) ? 'done' : open.includes(id) ? 'open' : ''}"`
+    + ` title="${scenarioTitle(id)}"></i>`).join('');
+
+  const nx = resumeId();
+  prog.querySelector('#mProgTxt').textContent = p.complete
+    ? `${p.total} 本すべてクリア`
+    : `${p.total} 本中 ${p.cleared} 本クリア · 次は「${scenarioTitle(nx)}」`;
+  prog.querySelector('#mResume').textContent =
+    p.complete ? '最初から遊ぶ' : '続きから';
+}
+
 /* ---- entering the game ---------------------------------------------------
    Order matters: the mode switch rebuilds the panel and resets the plot, so
    the role goes on after it. ui.js then shows that role's brief as the hint. */
@@ -343,12 +452,30 @@ function startDefence(){
   setSide('defense');
   setUiMode('campaign');
   setRole(id);
-  savePrefs({seen:1, side:'defense', role:id, mode:'campaign'});
+  markSeen('title');
+  savePrefs({side:'defense', role:id, mode:'campaign'});
   hideMenu();
 }
 function startExplore(){
   setUiMode('explore');
-  savePrefs({seen:1, mode:'explore'});
+  markSeen('title');
+  savePrefs({mode:'explore'});
+  hideMenu();
+}
+
+/* One click back into the campaign, at the scenario the ladder says you are on.
+   The role is not taken from the saved pick here: a scenario declares its own
+   player.role (and may lock it), and startScenario() is what applies that — the
+   same path the in-panel picker takes, so continuing cannot land you in a state
+   choosing the scenario by hand would not. */
+function resumeCampaign(){
+  const id = resumeId();
+  if(!id) return;
+  setSide('defense');
+  setUiMode('campaign');
+  startScenario(id);
+  markSeen('title');
+  savePrefs({side:'defense', mode:'campaign'});
   hideMenu();
 }
 
@@ -411,8 +538,9 @@ function initMenu(){
 
   cardTitle.querySelector('#mSideDef').onclick = showRoles;
   cardTitle.querySelector('#mExplore').onclick = startExplore;
+  cardTitle.querySelector('#mResume').onclick = resumeCampaign;
   cardTitle.querySelector('#mSkipNext').onclick = ev => {
-    savePrefs({seen:1});
+    markSeen('title');
     ev.currentTarget.textContent = '次回はスキップします';
     ev.currentTarget.disabled = true;
   };
@@ -440,28 +568,40 @@ function initMenu(){
      on a first visit there is nothing behind it to go back to. */
   addEventListener('keydown', ev => {
     if(ev.key !== 'Escape' || !el.classList.contains('show')) return;
-    if(menuPrefs()) hideMenu();
+    if(hasSeen('title')) hideMenu();
   });
 
   /* Deciding what to open is deferred one turn so main.js finishes its own
      init first: restoring campaign mode has to land on a built city. */
   setTimeout(()=>{
     const saved = menuPrefs();
-    if(!saved || !saved.seen){ showTitle(); return; }
-    if(saved.role !== undefined && knownRole(saved.role))
+
+    /* One-way migration, once: builds before the save layer kept "has the title
+       been seen" in this key. Hand it to save.js and never read it again — the
+       point of moving it was to stop having two writers, and a fallback that
+       keeps reading the old field would leave the second one in place. */
+    if(saved && saved.seen && !hasSeen('title')) markSeen('title');
+
+    if(!hasSeen('title')){ showTitle(); return; }
+    if(saved && saved.role !== undefined && knownRole(saved.role))
       picked = saved.role === null ? '' : saved.role;
     markRoles();
-    if(saved.mode === 'campaign'){
+    if(saved && saved.mode === 'campaign'){
       setSide('defense');
       setUiMode('campaign');
       setRole(picked === '' ? null : picked);
+      /* land where the ladder says you left off, not on scenario 1: setUiMode
+         restarts GAME.scenario, which on a fresh load is the default one. */
+      const id = resumeId();
+      if(id && id !== GAME.scenario) startScenario(id);
     }
   }, 0);
 }
 
 window.__menu = {initMenu, showTitle, showRoles, hideMenu, menuPrefs, forgetMenu,
                  pick(id){ picked = id === null ? '' : id; markRoles(); },
-                 startDefence, startExplore, plotStyle};
+                 startDefence, startExplore, resumeCampaign, resumeId,
+                 renderProgress, plotStyle};
 
 export {
   initMenu,

@@ -19,14 +19,23 @@ import standaloneK8sRules from './standalone-k8s-rules.js';
 import slowOutput from './slow-output.js';
 import eyesButNoHands from './eyes-but-no-hands.js';
 import aDifferentSource from './a-different-source.js';
+import rulesNotFollowed from './rules-not-followed.js';
+import nodesAreNotBuffers from './nodes-are-not-buffers.js';
+import silentBlindSpot from './silent-blind-spot.js';
 
+/* Order here does not matter — SCENARIOS is sorted by `order` below, and that
+   number lives in the scenario file because the teaching sequence is content.
+   The picker reads the sorted list, so this array is only the import manifest. */
 const RAW = [
   greenfield,
+  aDifferentSource,
+  eyesButNoHands,
+  rulesNotFollowed,
+  standaloneK8sRules,
   inheritedAllSyscalls,
   slowOutput,
-  standaloneK8sRules,
-  eyesButNoHands,
-  aDifferentSource
+  nodesAreNotBuffers,
+  silentBlindSpot
 ];
 
 /* the scenario the game opens on */

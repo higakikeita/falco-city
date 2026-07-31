@@ -21,7 +21,10 @@
 export default {
   id:'slow-output',
   title:'負荷は普通なのに落ちる',
-  order: 25,
+  /* the second drop scenario: 50 was about the INFLOW half of util, this one is
+     about the CAPACITY half. Moved off 25 so it no longer sits next to 50, whose
+     insight.wrong is nearly the same sentence as this one's. */
+  order: 70,
   blurb:'街は全部建っている。負荷は <b>×1.0</b>、<code>base_syscalls</code> も <code>default</code>。'+
         'それでもドロップが出て、1段見逃している。',
 
