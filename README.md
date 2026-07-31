@@ -28,6 +28,8 @@
 | `src/scenarios/*.js` | シナリオ本体。1ファイル1本・純データ |
 | `build.mjs` | esbuild で `src/main.js` を1つの通常スクリプトにまとめ、シェルに埋め込んで `docs/index.html` を作る |
 | `scripts/check-imports.mjs` | 各モジュールが使っている共有シンボルを import し忘れていないか検査 |
+| `scripts/regress.mjs` | 因果の回帰検査。`INVARIANTS.md` の主張を1件ずつ実際に回して、成立／破綻／未実装（GAP）を数える |
+| `scripts/harness/` | `regress.mjs` が使う土台（DOM なしでモジュールを評価して回す） |
 | `scripts/check-build.mjs` | 生成物の健全性検査（モジュール化されていない・three が埋まっている・タグが閉じている等） |
 | `docs/index.html` | **配布物**。単一ファイル・約0.6MB・three 同梱。ダブルクリックで開く（`file://` で動く） |
 
@@ -41,8 +43,12 @@ HTML のリンクを直接開かせるのも不可（署名付き URL に期限�
 ```bash
 npm install
 npm run dev      # http://localhost:8722 で src/ をそのまま配信
-npm run check    # import 検査 → ビルド → 生成物検査
+npm run check    # import 検査 → 因果の回帰検査 → ビルド → 生成物検査
+npm test         # 因果の回帰検査だけ
 ```
+
+`npm run check` は**因果が壊れると落ちます**（`scripts/regress.mjs` が非ゼロで終了する）。
+数値のチューニングではなく、どの主張が成立しなくなったかを見ること。
 
 `docs/` はコミットしない（`.gitignore` 済み）。公開物は `main` への push で
 GitHub Actions が作ってデプロイする。
@@ -798,4 +804,4 @@ __city.toggleMuted()
 - `docs/index.html` は Three.js を同梱しているのでオフラインで動く。ただし Poppins / Share Tech Mono は Google Fonts から読むので、完全オフラインだとシステムフォントに落ちる（レイアウトは崩れない）
 - 背景タブでは `requestAnimationFrame` が止まるので、見せる前にタブを前面にしておく（0×0 ビューポートからの復帰は ResizeObserver で対応済み）
 - WebGL が要る。リモートデスクトップ／VDI 経由だと重い場合がある
-- 初期カメラは都市の AABB に対する厳密フィットなので、1920×1080 から縦長 820×1200 まで8地区すべてが収まることを確認済み
+- 初期カメラは都市の AABB に対する厳密フィットなので、1920×1080 から縦長 820×1200 まで**9地区**すべてが収まることを確認済み。ゲームとしての下限は **1280×720**（モバイルは対象外）
