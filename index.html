@@ -73,9 +73,9 @@ canvas{display:block}
 
 /* ---------- campaign panel ---------- */
 .campaign{display:none;width:336px;padding:15px 17px 16px;
-  max-height:calc(100vh - 250px);overflow-y:auto;scrollbar-width:thin}
-.campaign.on{display:block}
-.cmp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  max-height:calc(100vh - 380px);flex-direction:column;min-height:0}
+.campaign.on{display:flex}
+.cmp-head{flex:none;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
   padding-bottom:11px;border-bottom:1px solid var(--grey-10)}
 .cmp-eyebrow{font-family:var(--font-mono);font-size:9px;letter-spacing:.18em;
   color:var(--grey-25);text-transform:uppercase}
@@ -83,14 +83,15 @@ canvas{display:block}
 .cmp-score{font-family:var(--font-mono);text-align:right;white-space:nowrap}
 .cmp-score b{font-size:22px;font-weight:400;color:var(--black)}
 .cmp-score span{font-size:9.5px;color:var(--grey-30);display:block;letter-spacing:.1em}
-.cmp-hint{font-size:11.5px;line-height:1.65;color:var(--grey-50);
+.cmp-hint{flex:none;font-size:11.5px;line-height:1.65;color:var(--grey-50);
   background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:11px 0}
 .cmp-hint.good{background:rgba(189,247,139,.3);color:var(--grey-60)}
 .cmp-hint b{color:var(--black);font-weight:600}
 .cmp-hint code{font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,.05);
   padding:1px 4px;border-radius:3px}
 
-.cmp-build{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.cmp-build{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;
+  flex:0 1 auto;max-height:148px;overflow-y:auto;scrollbar-width:thin}
 .cmp-row{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;
   font-family:var(--font-mono);font-size:10.5px;transition:.16s}
 .cmp-row .n{color:var(--grey-25);font-size:9px;width:15px;flex:none}
@@ -105,13 +106,14 @@ canvas{display:block}
 .cmp-row.locked{opacity:.42}
 .cmp-row.locked .lk{color:var(--grey-25);font-size:9.5px;flex:none}
 
-.cmp-run{width:100%;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;
+.cmp-run{width:100%;flex:none;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;
   text-transform:uppercase;border:0;background:var(--red-ui);color:#fff;padding:11px;
   border-radius:9px;cursor:pointer;transition:.16s}
 .cmp-run:hover{background:#D3454A}
 .cmp-run:disabled{background:var(--grey-20);cursor:default}
 
-.cmp-results{margin-top:11px;display:flex;flex-direction:column;gap:5px}
+.cmp-results{margin-top:11px;display:flex;flex-direction:column;gap:5px;
+  flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin}
 .cmp-res{border-radius:7px;padding:8px 10px;font-size:11px;line-height:1.55;
   border-left:3px solid var(--grey-20);background:var(--grey-10)}
 .cmp-res.hit{border-left-color:var(--lumin);background:rgba(189,247,139,.24)}
@@ -129,7 +131,7 @@ canvas{display:block}
   border-radius:4px;background:rgba(0,0,0,.06);color:var(--grey-50);border-left:2px solid}
 
 /* ---------- roles ---------- */
-.cmp-roles{display:flex;flex-wrap:wrap;gap:4px;padding:11px 0 0}
+.cmp-roles{flex:none;display:flex;flex-wrap:wrap;gap:4px;padding:11px 0 0}
 .cmp-roles button{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;
   border:1px solid var(--grey-10);background:transparent;color:var(--grey-40);
   padding:5px 8px;border-radius:7px;cursor:pointer;transition:.16s;white-space:nowrap;
@@ -150,12 +152,15 @@ canvas{display:block}
 .cmp-row button.askbtn:hover{background:var(--grey-10);color:var(--black)}
 
 /* a lever that belongs to another team is visible but untouchable */
-.dutylock{position:relative;opacity:.4;filter:grayscale(.55)}
+.dutylock{position:relative;filter:grayscale(.7)}
 .ui.interactive .dutylock,.ui.interactive .dutylock *{pointer-events:none}
-.dutylock::after{content:attr(data-owner);position:absolute;top:50%;left:50%;
-  transform:translate(-50%,-50%);font-family:var(--font-mono);font-size:9px;
-  letter-spacing:.12em;text-transform:uppercase;background:var(--black);color:#fff;
-  padding:4px 9px;border-radius:5px;white-space:nowrap;filter:grayscale(0)}
+/* veil the controls rather than dimming the whole panel, so the owner reads clearly */
+.dutylock::before{content:'';position:absolute;inset:0;border-radius:inherit;
+  background:rgba(250,251,251,.78)}
+.dutylock::after{content:attr(data-owner);position:absolute;top:50%;right:9px;
+  transform:translateY(-50%);font-family:var(--font-mono);font-size:9px;
+  letter-spacing:.12em;text-transform:uppercase;background:var(--grey-70);color:#fff;
+  padding:4px 9px;border-radius:5px;white-space:nowrap}
 
 .rrep{margin-top:11px;border-top:1px solid var(--grey-10);padding-top:10px;
   display:flex;flex-direction:column;gap:4px}
@@ -172,6 +177,8 @@ canvas{display:block}
 .rnote{font-size:11px;line-height:1.6;color:var(--grey-50);background:rgba(255,169,64,.13);
   border-left:2px solid var(--orange);border-radius:6px;padding:7px 9px;margin-top:5px}
 .rnote b{color:var(--grey-60);font-weight:600}
+.rnote code{font-family:var(--font-mono);font-size:10.5px;background:rgba(0,0,0,.05);
+  padding:1px 4px;border-radius:3px}
 
 /* ---------- top-right: legend + hud ---------- */
 #topRight{top:20px;right:20px;width:262px;display:flex;flex-direction:column;gap:10px;
@@ -409,22 +416,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     </div>
   </div>
 
-  <div class="panel campaign" id="campaign">
-    <div class="cmp-head">
-      <div>
-        <div class="cmp-eyebrow">mission</div>
-        <div class="cmp-title">検知パイプラインを一から建てる</div>
-      </div>
-      <div class="cmp-score"><b id="cmpScore">0</b><span>/ 6 検知</span></div>
-    </div>
-    <div class="cmp-hint" id="cmpHint">
-      いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
-    </div>
-    <div class="cmp-build" id="cmpBuild"></div>
-    <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
-    <div class="cmp-results" id="cmpResults"></div>
-  </div>
-
   <div class="segwrap">
     <div class="panel seg" id="modeSeg">
       <span class="caplbl">stack</span>
@@ -444,6 +435,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button data-drv="kmod">kmod</button>
     </div>
   </div>
+
+  <div class="panel campaign" id="campaign">
+    <div class="cmp-head">
+      <div>
+        <div class="cmp-eyebrow">mission</div>
+        <div class="cmp-title" id="cmpTitle">検知パイプラインを一から建てる</div>
+      </div>
+      <div class="cmp-score"><b id="cmpScore">0</b><span>/ 6 検知</span></div>
+    </div>
+    <div class="cmp-roles" id="cmpRoles"></div>
+    <div class="cmp-hint" id="cmpHint">
+      いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
+    </div>
+    <div class="cmp-build" id="cmpBuild"></div>
+    <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
+    <div class="cmp-results" id="cmpResults"></div>
+  </div>
+
 </div>
 
 <div class="ui interactive" id="topRight">
@@ -2523,6 +2532,229 @@ document.querySelectorAll('#uiModeSeg button').forEach(b=>
   b.onclick = ()=> setUiMode(b.dataset.ui));
 
 /* ============================================================
+   14c. ROLES — who owns which district, and which lever
+   ------------------------------------------------------------
+   One team never builds this pipeline. Four do, and most real detection gaps
+   sit on the seams between them rather than inside any one stage. So every
+   buildable district and every lever is attributed to a role, and a missed
+   attack step names the role whose decision caused it.
+
+   Pick a role and the other teams' levers go untouchable: you can see that
+   base_syscalls is set to `all`, and you cannot fix it. Their stages still
+   have to be built, but only by asking — and the ask count is the point.
+
+   This section deliberately adds nothing to 14b. It wraps renderBuildList /
+   renderResults / setUiMode / elRun.onclick rather than editing them, so the
+   campaign and the role layer can be worked on without sharing a line.
+   ============================================================ */
+const ROLES = [
+  { id:'platform', chip:'基盤', jp:'プラットフォーム', short:'plat', color:'#00A8BC',
+    owns:['driver','state'],
+    mission:'Falco をどこに載せ、何が見えるかを決める',
+    brief:'持ち物は <b>02 ドライバ</b>・<b>04 状態エンジン</b> と <b>DEPLOY</b> / <b>DRIVER</b>。'+
+          'ここの構成を間違えると、下流が何をしても検知は成立しない。' },
+  { id:'sre', chip:'SRE', jp:'SRE / ノード運用', short:'sre', color:'#E08A2E',
+    owns:['ring'],
+    mission:'落とさずに回す',
+    brief:'持ち物は <b>03 リングバッファ</b> と <b>TUNING</b> 一式。ここが<b>唯一イベントが落ちる場所</b>。'+
+          '検知条件を満たした攻撃でも、ここで消える。' },
+  { id:'detect', chip:'検知', jp:'検知エンジニア', short:'det', color:'#B15FC4',
+    owns:['rules','plugins','falcoctl'],
+    mission:'何を検知できるかを決める',
+    brief:'持ち物は <b>05 ルールエンジン</b>・<b>07 プラグイン入力</b>・<b>09 ルール配布</b>。'+
+          'パイプラインが完璧でも、ルールを持っていなければ1本も鳴らない。' },
+  { id:'soc', chip:'SOC', jp:'SOC / 対応', short:'soc', color:'#01353E',
+    owns:['outputs','sysdig'],
+    mission:'受け取って、止める',
+    brief:'持ち物は <b>06 出力チャネル</b>・<b>08 Sysdig Secure</b> と <b>STACK</b>。'+
+          '検知は届いて初めて検知で、止める手は目とは別の部品。' }
+];
+const roleById = id => ROLES.find(r => r.id === id);
+
+/* district -> role. 01 workloads has no owner: it is what the app teams ship. */
+const OWNER = {};
+ROLES.forEach(r => r.owns.forEach(d => OWNER[d] = r.id));
+
+/* lever group -> role. NODE LOAD is deliberately ownerless — load is not a
+   decision anybody makes, it is what the workload happens to be doing. */
+const LEVERS = [
+  ['#deploySeg',  'platform'],
+  ['#drvSeg',     'platform'],
+  ['.panel.tune', 'sre'],
+  ['#modeSeg',    'soc']
+];
+
+GAME.role = null;   // null = 全役（1人で全部やる）
+GAME.asks = 0;
+
+const elRoles = document.getElementById('cmpRoles');
+const elTitle = document.getElementById('cmpTitle');
+
+/* ---- which role's decision caused this miss ---- */
+function blameOf(r){
+  if(r.caught) return null;
+  const missing = r.needs.filter(k => !GAME.built.has(k));
+  if(missing.length){
+    /* the most upstream gap is the one that actually stopped the event */
+    const first = BUILD_ORDER.find(k => missing.includes(k)) || missing[0];
+    return OWNER[first] || null;
+  }
+  if(r.deploy && S.deploy !== r.deploy) return 'platform';
+  return 'sre';   /* everything was built and matched — the ring buffer ate it */
+}
+
+/* ---- levers you do not own are visible but untouchable ---- */
+function applyRoleLocks(){
+  for(const [sel, owner] of LEVERS){
+    const el = document.querySelector(sel);
+    if(!el) continue;
+    const lock = GAME.on && GAME.role && GAME.role !== owner;
+    el.classList.toggle('dutylock', lock);
+    if(lock) el.dataset.owner = `${roleById(owner).short} 担当`;
+    else delete el.dataset.owner;
+  }
+}
+
+function renderRoles(){
+  elRoles.innerHTML = '';
+  const add = (id, label, color) => {
+    const b = document.createElement('button');
+    if(GAME.role === id) b.className = 'on';
+    if(color){
+      const i = document.createElement('i');
+      i.style.background = color;
+      b.appendChild(i);
+    }
+    b.appendChild(document.createTextNode(label));
+    b.onclick = () => setRole(id);
+    elRoles.appendChild(b);
+  };
+  add(null, '全役');
+  ROLES.forEach(r => add(r.id, r.chip, r.color));
+  const ask = document.createElement('span');
+  ask.className = 'ask';
+  ask.textContent = GAME.asks ? `依頼 ${GAME.asks}件` : '';
+  elRoles.appendChild(ask);
+}
+
+function setRole(id){
+  GAME.role = id;
+  const r = id ? roleById(id) : null;
+  elTitle.textContent = r ? r.mission : '検知パイプラインを一から建てる';
+  elHint.className = 'cmp-hint';
+  elHint.innerHTML = r
+    ? `<b>${r.jp}</b>として参加する。${r.brief}`
+    : 'いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。';
+  renderRoles();
+  renderBuildList();
+  applyRoleLocks();
+}
+
+/* ---- build rows carry their owner, and other teams' stages must be asked ---- */
+function decorateBuildRows(){
+  [...elBuild.children].forEach((row, i) => {
+    const id = BUILD_ORDER[i];
+    const r = roleById(OWNER[id]);
+    if(!r) return;
+    const badge = document.createElement('span');
+    badge.className = 'own';
+    badge.textContent = r.short;
+    badge.style.borderLeftColor = r.color;
+    row.insertBefore(badge, row.children[2] || null);
+    if(GAME.role === r.id) row.classList.add('mine');
+    if(GAME.role && GAME.role !== r.id){
+      const b = row.querySelector('button');
+      if(b){
+        b.textContent = `${r.short} に依頼`;
+        b.classList.add('askbtn');
+        b.onclick = () => { GAME.asks++; build(id); renderRoles(); };
+      }
+    }
+  });
+}
+
+/* ---- scorecard: what each role's decisions cost ---- */
+function renderRoleReport(){
+  const wrap = document.createElement('div');
+  wrap.className = 'rrep';
+  wrap.innerHTML = '<h5>role scorecard</h5>';
+  ROLES.forEach(r => {
+    const misses = GAME.results.filter(x => x.blame === r.id).length;
+    const built  = r.owns.filter(k => GAME.built.has(k)).length;
+    const row = document.createElement('div');
+    row.className = 'rrow ' +
+      (misses ? 'blamed' : built === r.owns.length ? 'clean' : '');
+    row.style.borderLeftColor = r.color;
+    row.innerHTML =
+      `<span class="rn">${r.jp}${GAME.role === r.id ? '（あなた）' : ''}</span>`+
+      `<span class="rv">${built}/${r.owns.length} 建設`+
+      `${misses ? ` · 見逃し ${misses}` : ''}</span>`;
+    wrap.appendChild(row);
+  });
+  const note = html => {
+    const n = document.createElement('div');
+    n.className = 'rnote';
+    n.innerHTML = html;
+    wrap.appendChild(n);
+  };
+  /* the sharpest seam in the whole model, and the one it does not score */
+  if(S.tune.syscallSet === 'custom')
+    note('<b>役割の境目:</b> SRE が <code>base_syscalls</code> を絞ってドロップを止めている。'+
+         'その絞り込みが検知エンジニアのルールに必要な syscall まで落としていないかは、'+
+         'この模型では判定していない。実機では必ず突き合わせる。');
+  if(GAME.asks)
+    note(`<b>他チームへの依頼 ${GAME.asks}件。</b>自分の担当だけでは検知は完成しない — `+
+         'この回数が、組織側で払っているコストそのもの。');
+  elRes.appendChild(wrap);
+}
+
+function decorateResults(){
+  [...elRes.children].forEach((el, i) => {
+    const r = GAME.results[i];
+    const b = r && roleById(r.blame);
+    if(!b) return;
+    const s = document.createElement('span');
+    s.className = 'bl';
+    s.style.borderLeftColor = b.color;
+    s.textContent = `起因 · ${b.jp}`;
+    el.appendChild(s);
+  });
+  if(GAME.reveal >= GAME.results.length) renderRoleReport();
+}
+
+/* ---- seam: wrap 14b instead of editing it ---- */
+const baseRenderBuildList = renderBuildList;
+renderBuildList = function(){ baseRenderBuildList(); decorateBuildRows(); };
+
+const baseRenderResults = renderResults;
+renderResults = function(){
+  baseRenderResults();
+  if(!GAME.results) return;
+  decorateResults();
+  elRes.scrollTop = elRes.scrollHeight;   /* follow the reveal */
+};
+
+/* blame is snapshotted at run time so it cannot drift if the tuning is
+   changed while the results are still on screen */
+const baseRunClick = elRun.onclick;
+elRun.onclick = function(){
+  baseRunClick();
+  GAME.results.forEach(r => r.blame = blameOf(r));
+  renderResults();
+};
+
+const baseSetUiMode = setUiMode;
+setUiMode = function(m){
+  baseSetUiMode(m);
+  GAME.asks = 0;
+  if(GAME.on) setRole(GAME.role);
+  else applyRoleLocks();
+};
+
+renderRoles();
+applyRoleLocks();
+
+/* ============================================================
    15. minimap
    ============================================================ */
 const mm = document.getElementById('mmc');
@@ -2717,6 +2949,7 @@ window.__city = {
   frames:0,
   pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); tickReveal(dt); flushLog(dt); updateHud(dt); } },
   GAME, evaluate, build, setUiMode, runAttack,
+  ROLES, OWNER, blameOf, setRole,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
