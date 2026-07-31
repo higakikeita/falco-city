@@ -300,15 +300,7 @@ new ResizeObserver(onResize).observe(document.documentElement);
 onResize();
 
 
-/* ---- frame ----
-   Anything that has to move but does not belong to the simulation registers
-   here, so the render call stays in one place and main.js keeps one line. */
-const preRender = [];
-function onPreRender(fn){
-  preRender.push(fn);
-  return () => { const i = preRender.indexOf(fn); if(i>=0) preRender.splice(i,1); };
-}
-
+/* ---- frame ---- */
 const BLOOM_ONLY = new THREE.Layers(); BLOOM_ONLY.set(BLOOM_LAYER);
 const ALL_LAYERS = new THREE.Layers();        // layer 0, the default
 
@@ -337,7 +329,6 @@ function frameDt(){
 function renderFrame(){
   if(!glowWired) wireGlow();
   const dt = frameDt();
-  for(let i=0;i<preRender.length;i++) preRender[i](dt);
 
   if(!FX.post){ renderer.setRenderTarget(null); rawRender(scene, camera); return; }
 
@@ -397,8 +388,6 @@ export {
   homeCam,
   goHome,
   onResize,
-  onPreRender,
-  renderFrame,
   flyTo,
   tickFlight
 };

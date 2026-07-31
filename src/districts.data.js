@@ -566,7 +566,7 @@ const DISTRICTS = [
 <li><code>cpus_for_each_buffer</code> は <code>modern_ebpf</code> 専用で<strong>既定 2</strong> = 1つのバッファを 2 CPU で共有する（<code>1</code> で CPU ごと ＝ <code>ebpf</code> の既定、<code>0</code> で全オンライン CPU で1つ）</li>
 <li>バッファ数は <span class="mark"><code>ceil(オンライン CPU 数 ÷ この値)</code></span>。falco.yaml のコメントが「CPU 7個・既定 2 → <strong>バッファ4個</strong>」を図で実演している</li>
 <li><code>buf_size_preset</code> の 8 MiB は<strong>1バッファのサイズ</strong>。しかもバッファは仮想メモリに<strong>二重にマップ</strong>されるので、8 MiB のバッファは仮想メモリ上 <strong>16 MiB</strong> を占める</li>
-<li>現行の設定キーは <code>engine.modern_ebpf.cpus_for_each_buffer</code> と <code>engine.&lt;engine&gt;.buf_size_preset</code>（右の TUNING パネルのラベルは旧名のまま）</li>
+<li>現行の設定キーは <code>engine.modern_ebpf.cpus_for_each_buffer</code> と <code>engine.&lt;engine&gt;.buf_size_preset</code>。右の TUNING パネルもこの名前で出している</li>
 </ul>
 <p>この地区が描いている8本のレーンは<strong>ノード数ではなく CPU 数</strong>の話。ノードを増やしても既存ノードのバッファは増えず、DaemonSet の Pod が増える。</p>
 <p>パイプライン全体で、イベントが本当に消えるのはここだけ。だから運用では真っ先にこの数字を見る。</p>

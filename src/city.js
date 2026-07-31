@@ -4,7 +4,7 @@ import { C } from './palette.js';
 import { DISTRICTS } from './layout.js';
 import { GAME } from './state.js';
 import { box, chevron, groundText } from './mesh.js';
-import { world, onPreRender } from './scene.js';
+import { world } from './scene.js';
 import { BUILDERS } from './districts.build.js';
 
 
@@ -219,9 +219,15 @@ function updatePlots(){
 }
 
 /* The arrival animation matches menu.js's `plotin` keyframes (0.85s, overshoot
-   to 1.06) on purpose: the label and the lot land together. */
+   to 1.06) on purpose: the label and the lot land together.
+
+   It runs on its own rAF rather than through the render loop. The plots are
+   presentation only — nothing reads them — so they need no ordering against the
+   simulation, and keeping the clock here means scene.js's export surface and
+   main.js's frame both stay exactly as they were. Guarded because the
+   regression harness imports this module in Node. */
 const ARRIVE = 0.85;
-onPreRender(dt=>{
+function tickPlots(dt){
   /* nine districts and a Set lookup each: cheaper than plumbing an event, and
      it cannot go stale however the campaign changes its mind */
   updatePlots();
@@ -267,7 +273,18 @@ onPreRender(dt=>{
       p.band.material.opacity = st.bandOp;
     }
   }
-});
+}
+
+if(typeof requestAnimationFrame === 'function'){
+  let last = 0;
+  const frame = t => {
+    const dt = last ? Math.min(0.05, (t - last)/1000) : 0;
+    last = t;
+    tickPlots(dt);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
 
 export {
   districtObjs,
