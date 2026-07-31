@@ -72,6 +72,108 @@ canvas{display:block}
 .seg .caplbl{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-25);
   letter-spacing:.14em;padding:7px 8px 7px 10px;text-transform:uppercase}
 
+/* ---------- campaign panel ---------- */
+.campaign{display:none;width:336px;padding:15px 17px 16px;
+  max-height:calc(100vh - 250px);overflow-y:auto;scrollbar-width:thin}
+.campaign.on{display:block}
+.cmp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  padding-bottom:11px;border-bottom:1px solid var(--grey-10)}
+.cmp-eyebrow{font-family:var(--font-mono);font-size:9px;letter-spacing:.18em;
+  color:var(--grey-25);text-transform:uppercase}
+.cmp-title{font-size:13.5px;font-weight:600;margin-top:3px;line-height:1.35}
+.cmp-score{font-family:var(--font-mono);text-align:right;white-space:nowrap}
+.cmp-score b{font-size:22px;font-weight:400;color:var(--black)}
+.cmp-score span{font-size:9.5px;color:var(--grey-30);display:block;letter-spacing:.1em}
+.cmp-hint{font-size:11.5px;line-height:1.65;color:var(--grey-50);
+  background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:11px 0}
+.cmp-hint.good{background:rgba(189,247,139,.3);color:var(--grey-60)}
+.cmp-hint b{color:var(--black);font-weight:600}
+.cmp-hint code{font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,.05);
+  padding:1px 4px;border-radius:3px}
+
+.cmp-build{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.cmp-row{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;
+  font-family:var(--font-mono);font-size:10.5px;transition:.16s}
+.cmp-row .n{color:var(--grey-25);font-size:9px;width:15px;flex:none}
+.cmp-row .nm{flex:1;color:var(--grey-50);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmp-row button{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.08em;
+  text-transform:uppercase;border:0;background:var(--black);color:#fff;padding:5px 10px;
+  border-radius:6px;cursor:pointer;flex:none}
+.cmp-row button:hover{background:var(--grey-60)}
+.cmp-row.done{background:rgba(189,247,139,.24)}
+.cmp-row.done .nm{color:var(--grey-60)}
+.cmp-row.done .tick{color:#5C9A2E;font-size:11px;flex:none}
+.cmp-row.locked{opacity:.42}
+.cmp-row.locked .lk{color:var(--grey-25);font-size:9.5px;flex:none}
+
+.cmp-run{width:100%;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;border:0;background:var(--red-ui);color:#fff;padding:11px;
+  border-radius:9px;cursor:pointer;transition:.16s}
+.cmp-run:hover{background:#D3454A}
+.cmp-run:disabled{background:var(--grey-20);cursor:default}
+
+.cmp-results{margin-top:11px;display:flex;flex-direction:column;gap:5px}
+.cmp-res{border-radius:7px;padding:8px 10px;font-size:11px;line-height:1.55;
+  border-left:3px solid var(--grey-20);background:var(--grey-10)}
+.cmp-res.hit{border-left-color:var(--lumin);background:rgba(189,247,139,.24)}
+.cmp-res.miss{border-left-color:var(--red-ui);background:rgba(234,82,85,.11)}
+.cmp-res .st{font-family:var(--font-mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--grey-30);display:block;margin-bottom:2px}
+.cmp-res.hit .st{color:#4C8A22}
+.cmp-res.miss .st{color:#B23A3D}
+.cmp-res .ac{color:var(--grey-60);font-weight:600}
+.cmp-res .wy{color:var(--grey-50);display:block;margin-top:3px}
+.cmp-res .rl{font-family:var(--font-mono);font-size:10px;color:var(--grey-40);
+  display:block;margin-top:2px}
+.cmp-res .bl{font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;display:inline-block;margin-top:5px;padding:2px 6px;
+  border-radius:4px;background:rgba(0,0,0,.06);color:var(--grey-50);border-left:2px solid}
+
+/* ---------- roles ---------- */
+.cmp-roles{display:flex;flex-wrap:wrap;gap:4px;padding:11px 0 0}
+.cmp-roles button{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;
+  border:1px solid var(--grey-10);background:transparent;color:var(--grey-40);
+  padding:5px 8px;border-radius:7px;cursor:pointer;transition:.16s;white-space:nowrap;
+  display:flex;align-items:center;gap:5px}
+.cmp-roles button:hover{border-color:var(--grey-20);color:var(--black)}
+.cmp-roles button.on{background:var(--black);color:#fff;border-color:var(--black)}
+.cmp-roles button i{width:6px;height:6px;border-radius:50%;flex:none;background:currentColor}
+.cmp-roles .ask{font-family:var(--font-mono);font-size:9px;color:var(--grey-25);
+  letter-spacing:.1em;margin-left:auto;align-self:center;white-space:nowrap}
+
+.cmp-row .own{font-family:var(--font-mono);font-size:8.5px;letter-spacing:.08em;
+  text-transform:uppercase;padding:2px 5px;border-radius:4px;flex:none;
+  border-left:2px solid;background:rgba(0,0,0,.045);color:var(--grey-40)}
+.cmp-row.mine{box-shadow:inset 0 0 0 1px var(--grey-10)}
+.cmp-row.done.mine{box-shadow:none}
+.cmp-row button.askbtn{background:transparent;border:1px solid var(--grey-20);
+  color:var(--grey-40)}
+.cmp-row button.askbtn:hover{background:var(--grey-10);color:var(--black)}
+
+/* a lever that belongs to another team is visible but untouchable */
+.dutylock{position:relative;opacity:.4;filter:grayscale(.55)}
+.ui.interactive .dutylock,.ui.interactive .dutylock *{pointer-events:none}
+.dutylock::after{content:attr(data-owner);position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);font-family:var(--font-mono);font-size:9px;
+  letter-spacing:.12em;text-transform:uppercase;background:var(--black);color:#fff;
+  padding:4px 9px;border-radius:5px;white-space:nowrap;filter:grayscale(0)}
+
+.rrep{margin-top:11px;border-top:1px solid var(--grey-10);padding-top:10px;
+  display:flex;flex-direction:column;gap:4px}
+.rrep h5{font-family:var(--font-mono);font-size:9px;font-weight:400;letter-spacing:.16em;
+  color:var(--grey-25);text-transform:uppercase;margin-bottom:2px}
+.rrow{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10px;
+  padding:5px 7px;border-radius:6px;background:var(--grey-10);border-left:2px solid}
+.rrow .rn{flex:1;color:var(--grey-50);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .rv{color:var(--black);flex:none}
+.rrow.clean{background:rgba(189,247,139,.26)}
+.rrow.clean .rv{color:#4C8A22}
+.rrow.blamed{background:rgba(234,82,85,.11)}
+.rrow.blamed .rv{color:#B23A3D}
+.rnote{font-size:11px;line-height:1.6;color:var(--grey-50);background:rgba(255,169,64,.13);
+  border-left:2px solid var(--orange);border-radius:6px;padding:7px 9px;margin-top:5px}
+.rnote b{color:var(--grey-60);font-weight:600}
+
 /* ---------- top-right: legend + hud ---------- */
 #topRight{top:20px;right:20px;width:262px;display:flex;flex-direction:column;gap:10px;
   max-height:calc(100vh - 40px);overflow-y:auto;scrollbar-width:thin}
@@ -298,6 +400,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <div class="ttl">Runtime Security City</div>
       <div class="sub">syscall → alert · walkable model</div>
     </div>
+  </div>
+
+  <div class="segwrap">
+    <div class="panel seg" id="uiModeSeg">
+      <span class="caplbl">mode</span>
+      <button data-ui="explore" class="on">Explore</button>
+      <button data-ui="campaign">Campaign</button>
+    </div>
+  </div>
+
+  <div class="panel campaign" id="campaign">
+    <div class="cmp-head">
+      <div>
+        <div class="cmp-eyebrow">mission</div>
+        <div class="cmp-title">検知パイプラインを一から建てる</div>
+      </div>
+      <div class="cmp-score"><b id="cmpScore">0</b><span>/ 6 検知</span></div>
+    </div>
+    <div class="cmp-hint" id="cmpHint">
+      いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
+    </div>
+    <div class="cmp-build" id="cmpBuild"></div>
+    <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
+    <div class="cmp-results" id="cmpResults"></div>
   </div>
 
   <div class="segwrap">
@@ -4365,6 +4491,8 @@ const DISTRICTS = [
      cam:          optional hand-tuned camera; derived if omitted
    ============================================================ */
 const FLOW_X0 = -84, FLOW_GAP = 8, LANE_PAD = 10, BOX_PAD = 5;
+/* set by setUiMode; read by homeView, which runs during init before GAME exists */
+let campaignView = false;
 const byId = id => DISTRICTS.find(d => d.id === id);
 const isFlow = d => !d.lane || d.lane === 'flow';
 
@@ -4456,10 +4584,14 @@ const HOME_DIR = new THREE.Vector3(-0.40, 0.53, 0.75).normalize();
 
 /* Exact fit: push the camera back along HOME_DIR until every corner of CITY_BOX
    is inside the frustum. Adapts to any aspect ratio instead of guessing. */
-function homeCam(){
+function homeView(){
   const a  = Math.max(1,innerWidth)/Math.max(1,innerHeight);
   const vt = Math.tan(camera.fov*Math.PI/360);
   const ht = vt*a;
+  /* the campaign panel covers the left ~third of the viewport, so fit the city
+     into the remaining width and then slide the view across by that much */
+  const F   = campaignView ? 0.32 : 0;
+  const htF = ht*(1-F);
   const zA = HOME_DIR.clone();                                  // camera sits at +zA
   const xA = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), zA).normalize();
   const yA = new THREE.Vector3().crossVectors(zA, xA);
@@ -4470,10 +4602,17 @@ function homeCam(){
           i&2 ? CITY_BOX.max.y : CITY_BOX.min.y,
           i&4 ? CITY_BOX.max.z : CITY_BOX.min.z).sub(HOME_TGT);
     const pz = p.dot(zA);
-    d = Math.max(d, pz + Math.abs(p.dot(xA))/ht, pz + Math.abs(p.dot(yA))/vt);
+    d = Math.max(d, pz + Math.abs(p.dot(xA))/htF, pz + Math.abs(p.dot(yA))/vt);
   }
-  return HOME_TGT.clone().add(HOME_DIR.clone().multiplyScalar(d*1.04)).toArray();
+  d *= 1.04;
+  /* the campaign panel covers the left third of the screen, so slide the whole
+     view sideways (camera and target together) to keep the city clear of it */
+  const shift = xA.clone().multiplyScalar(-d*ht*F);
+  const tgt = HOME_TGT.clone().add(shift);
+  return { pos: tgt.clone().add(HOME_DIR.clone().multiplyScalar(d)).toArray(), tgt };
 }
+const homeCam = () => homeView().pos;
+const goHome  = () => { const h = homeView(); flyTo(h.pos, h.tgt); };
 camera.position.set(...homeCam());
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -5055,6 +5194,11 @@ const S = {
   alertWindow:[]
 };
 
+/* campaign progress. Declared here because spawn() and step() read it, and
+   they run before section 14b. In explore mode everything is already built. */
+const GAME = { on:false, built:new Set(DISTRICTS.map(d=>d.id)),
+               results:null, reveal:0, revealT:0, frontier:Infinity };
+
 const KERNEL_PASS = 0.42;     // fraction of syscalls the default set forwards
 const MATCH_RATE  = 0.004;    // of evaluated events, only a sliver rings
 
@@ -5099,7 +5243,8 @@ function spawn(i, delay=0){
   /* per-pass gates — MUST be reset, particles are recycled */
   p.gated = false; p.dropRolled = false; p.enriched = false; p.rolled = false;
   /* kernel-less: every event comes in through a plugin */
-  p.plugin = S.deploy === 'plugins' ? true : Math.random() < 0.03;
+  const pluginsUp = !GAME.on || GAME.built.has('plugins');
+  p.plugin = pluginsUp && (S.deploy === 'plugins' ? true : Math.random() < 0.03);
   if(p.plugin){
     p.x = ST.pluginX; p.z0 = ST.pluginZ + (Math.random()-0.5)*16; p.z = p.z0; p.y = 6;
     /* plugin inputs bypass driver + ring buffer entirely */
@@ -5252,6 +5397,7 @@ function step(dt){
     switch(p.st){
       case 0: {
         p.x += speed*dt;
+        if(GAME.on && p.x > GAME.frontier){ p.st=3; p.fade=1; writeP(i,p); break; }
 
         /* kernel gate */
         if(p.gated !== true && p.x >= ST.driver){
@@ -5318,6 +5464,9 @@ function step(dt){
       }
       case 2: {                                 // matched alert
         p.x += speed*dt*0.85;
+        if(GAME.on && p.x > GAME.frontier && !GAME.built.has('sysdig')){
+          p.st=3; p.fade=1; writeP(i,p); break;
+        }
         if(p.x > ST.rulesOut && p.x < ST.out+8){
           const tz = OUT_PIPES.length ? OUT_PIPES[p.prio % OUT_PIPES.length] : 0;
           p.z += (tz - p.z)*Math.min(1,dt*2.4);
@@ -5524,12 +5673,17 @@ function updateTags(){
     el.classList.toggle('hot', S.hovered===d.id || S.selected===d.id);
     el.classList.toggle('dim',
       d.id==='sysdig' && S.mode!=='sysdig');
+    if(GAME.on && !GAME.built.has(d.id)) el.style.opacity = 0;
   }
 }
 
 /* ============================================================
    12. hover / pick
    ============================================================ */
+/* districts that are not built cannot be hovered or clicked */
+const pickable = () => hitTargets.filter(h =>
+  !GAME.on || GAME.built.has(h.userData.district.id));
+
 const ray = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const hoverCard = document.getElementById('hoverCard');
@@ -5544,7 +5698,7 @@ renderer.domElement.addEventListener('pointermove', e=>{
   ndc.x = (e.clientX/innerWidth)*2-1;
   ndc.y = -(e.clientY/innerHeight)*2+1;
   ray.setFromCamera(ndc, camera);
-  const hits = ray.intersectObjects(hitTargets, false);
+  const hits = ray.intersectObjects(pickable(), false);
   const d = hits.length ? hits[0].object.userData.district : null;
   if((d?d.id:null) !== S.hovered){
     S.hovered = d ? d.id : null;
@@ -5578,7 +5732,7 @@ renderer.domElement.addEventListener('pointerup', e=>{
   ndc.x = (e.clientX/innerWidth)*2-1;
   ndc.y = -(e.clientY/innerHeight)*2+1;
   ray.setFromCamera(ndc, camera);
-  const hits = ray.intersectObjects(hitTargets, false);
+  const hits = ray.intersectObjects(pickable(), false);
   if(hits.length) select(hits[0].object.userData.district.id);
   else closeDrawer();
 });
@@ -5633,7 +5787,7 @@ DISTRICTS.forEach(d=>{
 });
 const reset = document.createElement('button');
 reset.innerHTML = `<span class="n">↺</span>全体`;
-reset.onclick = ()=>{ closeDrawer(); flyTo(homeCam(), HOME_TGT); };
+reset.onclick = ()=>{ closeDrawer(); goHome(); };
 tour.appendChild(reset);
 
 /* ============================================================
@@ -5677,7 +5831,7 @@ function setMode(m){
 /* Host Shield exists in every Sysdig deployment; Cluster Shield only where
    there is a cluster to guard. Neither exists in plain OSS Falco. */
 function applyShield(){
-  const on = S.mode === 'sysdig';
+  const on = S.mode === 'sysdig' && (!GAME.on || GAME.built.has('sysdig'));
   if(deployRefs.hostShield)    deployRefs.hostShield.visible    = on && S.deploy !== 'plugins';
   if(deployRefs.clusterShield) deployRefs.clusterShield.visible = on && S.deploy === 'k8s';
 }
@@ -5830,8 +5984,226 @@ addEventListener('keydown', e=>{
   const i = parseInt(e.key,10);
   if(i>=1 && i<=DISTRICTS.length) select(DISTRICTS[i-1].id);
   if(e.key==='Escape') closeDrawer();
-  if(e.key==='0'){ closeDrawer(); flyTo(homeCam(), HOME_TGT); }
+  if(e.key==='0'){ closeDrawer(); goHome(); }
 });
+
+/* ============================================================
+   14b. CAMPAIGN — build the pipeline from an empty plot
+   ------------------------------------------------------------
+   The teaching is structural: every stage exists because without it the
+   previous stage is useless. So rather than explaining that, the game makes
+   you run an attack chain against whatever you have actually built, and the
+   steps you cannot possibly catch stay uncaught.
+   ============================================================ */
+const DEPS = {
+  workloads:[], driver:['workloads'], ring:['driver'], state:['ring'],
+  rules:['state'], outputs:['rules'], plugins:['rules'],
+  falcoctl:['rules'], sysdig:['outputs']
+};
+const BUILD_ORDER = ['driver','ring','state','rules','outputs','plugins','falcoctl','sysdig'];
+
+/* what each stage buys you, said in terms of what was impossible before */
+const UNLOCK = {
+  driver:'カーネルに目がついた。ただし届くのは <b>生の syscall</b> だけ — <code>fd=7 に write した</code> では、まだ何のルールも書けない。',
+  ring:  'イベントがユーザ空間に届くようになった。ここが<b>唯一落ちる場所</b>なので、負荷を上げるとドロップする。',
+  state: '<b>ここが分水嶺。</b> スレッドテーブルと FD テーブルが載り、はじめて <code>proc.name</code> / <code>fd.name</code> / <code>container.id</code> が使える。ルールが書けるようになった。',
+  rules: 'ルールが評価されるようになった。ただしまだ<b>誰にも届いていない</b>。',
+  outputs:'アラートが人に届くようになった。ここまでで syscall 由来の検知が成立する。',
+  plugins:'syscall 以外の入力が合流した。<b>クラウド側の操作</b>が見えるようになった。',
+  falcoctl:'ルールが OCI アーティファクトとして追従するようになった。<b>新しい検知</b>を持てる。',
+  sysdig:'相関と<b>止める手</b>が入った。検知して終わり、ではなくなった。'
+};
+
+/* Each step names what it needs. `deploy` pins a required topology. */
+const CHAIN = [
+  { jp:'kubectl exec でコンテナにシェルを取る', rule:'Terminal shell in container',
+    needs:['driver','ring','state','rules','outputs'] },
+  { jp:'/etc/shadow を読んで資格情報を探す', rule:'Read sensitive file untrusted',
+    needs:['driver','ring','state','rules','outputs'] },
+  { jp:'/etc/cron.d に書き込んで永続化する', rule:'Write below etc',
+    needs:['driver','ring','state','rules','outputs'] },
+  { jp:'/tmp に落としたバイナリを実行する', rule:'Drop and execute new binary in container',
+    needs:['driver','ring','state','rules','outputs','falcoctl'],
+    why:'この検知は既定で同梱されるルールセットには入っていない。falcoctl でルールを追従させていなければ、そもそも持っていない。' },
+  { jp:'K8s API サーバに接触して権限を探る', rule:'Contact K8S API Server From Container',
+    needs:['driver','ring','state','rules','outputs'], deploy:'k8s',
+    why:'Host 構成には Kubernetes の文脈が無いので、この振る舞いを k8s イベントとして扱えない。' },
+  { jp:'盗んだ資格情報でクラウドへ（MFA 無しログイン → バケットの暗号化を解除）',
+    rule:'Console Login Without MFA / Delete Bucket Encryption',
+    needs:['rules','outputs','plugins'],
+    why:'クラウド API の操作は syscall には一切現れない。プラグイン入力が無ければ<b>原理的に</b>見えない。' }
+];
+const RESPONSE = { jp:'侵害されたコンテナを止めて封じ込める', rule:'kill / pause container',
+  needs:['sysdig'],
+  why:'OSS Falco は目。止める手は別のコンポーネント（Sysdig の応答、または Falco Talon）。' };
+
+
+const canBuild = id => DEPS[id].every(k => GAME.built.has(k));
+
+/* particles evaporate at the edge of what has actually been built */
+function frontier(){
+  if(!GAME.on) return Infinity;
+  let x = byId('workloads').x1;
+  for(const d of DISTRICTS)
+    if(isFlow(d) && GAME.built.has(d.id)) x = Math.max(x, d.x1);
+  return x + 4;
+}
+
+function applyGameVisibility(){
+  for(const d of DISTRICTS){
+    const vis = !GAME.on || GAME.built.has(d.id);
+    districtObjs[d.id].group.visible = vis;
+    tagEls[d.id].style.display = vis ? '' : 'none';
+  }
+  polPoints.visible = !GAME.on || GAME.built.has('falcoctl') || GAME.built.has('sysdig');
+  GAME.frontier = frontier();
+}
+
+/* ---- evaluation is a pure function of what you built and how you tuned ---- */
+function evaluate(){
+  const M = model();
+  const has = ids => ids.every(k => GAME.built.has(k));
+  const out = [];
+  /* a real overload steals one otherwise-detected syscall step */
+  const dropping = M.util > 1 && M.dropP > 0.05;
+  let stolen = dropping;
+
+  for(const s of CHAIN){
+    const missing = s.needs.filter(k => !GAME.built.has(k));
+    let caught = missing.length === 0, why = null;
+    if(!caught){
+      why = s.why || `まだ建っていない: ${missing.map(m=>byId(m).jp).join(' / ')}`;
+    } else if(s.deploy && S.deploy !== s.deploy){
+      caught = false;
+      why = s.why || `この構成（${S.deploy}）では検知できない。`;
+    } else if(stolen && s.needs.includes('ring')){
+      caught = false; stolen = false;
+      why = `検知条件は満たしていたのに、<b>リングバッファでドロップした</b>（drain utilisation ${Math.round(M.util*100)}%）。`;
+    }
+    out.push({...s, caught, why});
+  }
+  const rMissing = RESPONSE.needs.filter(k => !GAME.built.has(k));
+  out.push({...RESPONSE, response:true, caught:rMissing.length===0,
+            why: rMissing.length ? RESPONSE.why : null});
+  return out;
+}
+
+/* ---- panel rendering ---- */
+const elCmp = document.getElementById('campaign');
+const elBuild = document.getElementById('cmpBuild');
+const elRes = document.getElementById('cmpResults');
+const elHint = document.getElementById('cmpHint');
+const elScore = document.getElementById('cmpScore');
+const elRun = document.getElementById('cmpRun');
+
+function renderBuildList(){
+  elBuild.innerHTML = '';
+  BUILD_ORDER.forEach(id=>{
+    const d = byId(id);
+    const row = document.createElement('div');
+    const done = GAME.built.has(id), open = !done && canBuild(id);
+    row.className = 'cmp-row ' + (done ? 'done' : open ? '' : 'locked');
+    row.innerHTML = `<span class="n">${d.n}</span><span class="nm">${d.jp}</span>`;
+    if(done) row.insertAdjacentHTML('beforeend', '<span class="tick">✓</span>');
+    else if(open){
+      const b = document.createElement('button');
+      b.textContent = '建設';
+      b.onclick = ()=> build(id);
+      row.appendChild(b);
+    } else {
+      row.insertAdjacentHTML('beforeend',
+        `<span class="lk">要 ${DEPS[id].map(k=>byId(k).jp).join('・')}</span>`);
+    }
+    elBuild.appendChild(row);
+  });
+}
+
+function build(id){
+  if(!canBuild(id) || GAME.built.has(id)) return;
+  GAME.built.add(id);
+  applyGameVisibility();
+  renderBuildList();
+  elHint.className = 'cmp-hint good';
+  elHint.innerHTML = UNLOCK[id] || '';
+  flyTo(byId(id).cam, districtObjs[id].center);
+  GAME.results = null; elRes.innerHTML = '';
+  if(id === 'sysdig') setMode('sysdig');
+}
+
+function renderResults(){
+  elRes.innerHTML = '';
+  if(!GAME.results) return;
+  const shown = GAME.results.slice(0, GAME.reveal);
+  shown.forEach((r,i)=>{
+    const el = document.createElement('div');
+    el.className = 'cmp-res ' + (r.caught ? 'hit' : 'miss');
+    el.innerHTML =
+      `<span class="st">${r.response ? '対処' : 'step '+(i+1)} · ${r.caught ? '検知' : '見逃し'}</span>`+
+      `<span class="ac">${r.jp}</span>`+
+      `<span class="rl">${r.rule}</span>`+
+      (r.why ? `<span class="wy">${r.why}</span>` : '');
+    elRes.appendChild(el);
+  });
+  const det = GAME.results.filter(r=>!r.response);
+  const hit = det.filter(r=>r.caught).length;
+  elScore.textContent = GAME.reveal ? hit : 0;
+  if(GAME.reveal >= GAME.results.length){
+    const resp = GAME.results.find(r=>r.response);
+    elHint.className = 'cmp-hint' + (hit===det.length && resp.caught ? ' good' : '');
+    elHint.innerHTML = hit === det.length
+      ? (resp.caught
+          ? '<b>全段検知＋封じ込め。</b>目と手が揃った状態がこれ。'
+          : '<b>全段検知。ただし止められていない。</b>検知と応答は別の部品。')
+      : `<b>${det.length-hit} 段を見逃した。</b>各行の理由が、その部品が存在する理由。`;
+  }
+}
+
+function runAttack(){
+  GAME.results = evaluate();
+  GAME.reveal = 0; GAME.revealT = 0;
+  elRun.disabled = true;
+  renderResults();
+}
+elRun.onclick = runAttack;
+
+/* reveal one step at a time, driven from the frame loop */
+function tickReveal(dt){
+  if(!GAME.results || GAME.reveal >= GAME.results.length) return;
+  GAME.revealT -= dt;
+  if(GAME.revealT > 0) return;
+  GAME.revealT = 0.62;
+  GAME.reveal++;
+  renderResults();
+  if(GAME.reveal >= GAME.results.length) elRun.disabled = false;
+}
+
+function setUiMode(m){
+  GAME.on = campaignView = m === 'campaign';
+  [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
+    b.classList.toggle('on', b.dataset.ui === m));
+  elCmp.classList.toggle('on', GAME.on);
+  document.getElementById('hint').classList.add('gone');
+  if(GAME.on){
+    GAME.built = new Set(['workloads']);
+    GAME.results = null; GAME.reveal = 0;
+    elRes.innerHTML = ''; elScore.textContent = '0'; elRun.disabled = false;
+    elHint.className = 'cmp-hint';
+    elHint.innerHTML = 'いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。';
+    S.counters = {sys:0, ring:0, drop:0, rules:0, alerts:0};
+    S.shown    = {sys:0, ring:0, drop:0, rules:0, alerts:0};
+    S.alertWindow = [];
+    setMode('oss');
+    renderBuildList();
+  } else {
+    GAME.built = new Set(DISTRICTS.map(d=>d.id));
+  }
+  applyGameVisibility();
+  applyShield();
+  closeDrawer();
+  goHome();
+}
+document.querySelectorAll('#uiModeSeg button').forEach(b=>
+  b.onclick = ()=> setUiMode(b.dataset.ui));
 
 /* ============================================================
    15. minimap
@@ -5854,6 +6226,7 @@ function drawMinimap(){
   mctx.beginPath(); mctx.moveTo(mx(-80),mz(0)); mctx.lineTo(mx(90),mz(0)); mctx.stroke();
 
   DISTRICTS.forEach(d=>{
+    if(GAME.on && !GAME.built.has(d.id)) return;
     const x=mx(d.x0), y=mz(d.z0), w=mx(d.x1)-mx(d.x0), h=mz(d.z1)-mz(d.z0);
     const active = S.selected===d.id || S.hovered===d.id;
     const dim = d.id==='sysdig' && S.mode!=='sysdig';
@@ -5988,6 +6361,7 @@ function frame(){
   controls.update();
 
   step(dt);
+  tickReveal(dt);
   flushLog(dt);
   updateTags();
   updateHud(dt);
@@ -6024,12 +6398,14 @@ onResize();
 window.__city = {
   step, S, DISTRICTS, select, setMode,
   frames:0,
-  pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); flushLog(dt); updateHud(dt); } },
+  pump(n=60, dt=1/60){ for(let i=0;i<n;i++){ step(dt); tickReveal(dt); flushLog(dt); updateHud(dt); } },
+  GAME, evaluate, build, setUiMode, runAttack,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
   camDist(){ return camera.position.distanceTo(controls.target); },
-  applyHome(){ onResize(); camera.position.set(...homeCam()); controls.target.copy(HOME_TGT);
+  applyHome(){ onResize(); const h = homeView();
+               camera.position.set(...h.pos); controls.target.copy(h.tgt);
                controls.update(); updateTags(); renderer.render(scene,camera); }
 };
 
@@ -6038,6 +6414,7 @@ setMode('oss');
 document.querySelector('#drvSeg button').click();
 setDeploy('k8s');
 onTuneChange();
+applyGameVisibility();
 drawMinimap();
 frame();
 setTimeout(()=> document.getElementById('loader').classList.add('gone'), 620);
