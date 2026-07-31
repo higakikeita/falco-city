@@ -17,12 +17,16 @@ import greenfield from './greenfield.js';
 import inheritedAllSyscalls from './inherited-all-syscalls.js';
 import standaloneK8sRules from './standalone-k8s-rules.js';
 import rulesNotFollowed from './rules-not-followed.js';
+import eyesButNoHands from './eyes-but-no-hands.js';
+import aDifferentSource from './a-different-source.js';
 
 const RAW = [
   greenfield,
   inheritedAllSyscalls,
   standaloneK8sRules,
-  rulesNotFollowed
+  rulesNotFollowed,
+  eyesButNoHands,
+  aDifferentSource
 ];
 
 /* the scenario the game opens on */
