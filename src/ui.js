@@ -11,7 +11,7 @@ import {
   GAME, DEPS, BUILD_ORDER, SIDES, ROLES, roleById, OWNER, LEVER_OWNER,
   canBuild, canUseLever, roleReport, verdictText, score,
   build, requestBuild, runAttack, setRole, setSide, setUiMode, onCampaignChange,
-  SCENARIOS, activeScenario, activeEnv, startScenario, goalStatus,
+  SCENARIOS, activeScenario, activeEnv, activeChain, startScenario, goalStatus,
   allowedDeploys, allowedDrivers
 } from './campaign.js';
 import { initMenu, plotTag, plotStyle } from './menu.js';
@@ -177,6 +177,7 @@ const elBuild = document.getElementById('cmpBuild');
 const elRun   = document.getElementById('cmpRun');
 const elRes   = document.getElementById('cmpResults');
 const elScore = document.getElementById('cmpScore');
+const elScoreOf = document.getElementById('cmpScoreOf');
 
 const DEFAULT_MISSION = '検知パイプラインを一から建てる';
 
@@ -205,7 +206,18 @@ const LEVER_NODE = {
 Object.assign(elHint.style, {flex:'0 0 auto', minHeight:'48px', maxHeight:'104px',
                              overflowY:'auto'});
 elBuild.style.minHeight = '68px';
-elRes.style.minHeight = '76px';      /* scrolls, and the reveal follows itself */
+
+/* The results reserve no room until there are results. Before the first run
+   that space belongs to the build list, which is the only thing on screen that
+   says what you may do next — and at 1280×720 it was showing 68px of a 252px
+   list, so the last stage (08 Sysdig Secure, the correct move in more than one
+   scenario) sat permanently below the fold. */
+function sizeResults(){
+  const has = !!(GAME.results && GAME.reveal);
+  elRes.style.minHeight = has ? '76px' : '0px';
+  elRes.style.flex      = has ? '1 1 auto' : '0 0 auto';
+}
+sizeResults();
 
 /* The panel and the minimap are both fixed to the left edge, one from the top
    and one from the bottom, so at the supported minimum of 1280×720 they overlap
@@ -407,6 +419,23 @@ function renderBuildList(){
     }
     elBuild.appendChild(row);
   });
+  keepActionableVisible();
+}
+
+/* The list is in dependency order, which is the teaching, so the row you can
+   press is wherever the pipeline says it is — for 08 Sysdig Secure that is
+   last. If the scroller cannot show everything, it has to show *that* row:
+   a build list scrolled past the only legal move reads as "no options". */
+function keepActionableVisible(){
+  const more = elBuild.scrollHeight > elBuild.clientHeight + 1;
+  elBuild.classList.toggle('more', more);
+  if(!more) return;
+  const act = elBuild.querySelector('.cmp-row:not(.done):not(.locked)');
+  if(!act) return;
+  const r = act.getBoundingClientRect();
+  const view = elBuild.getBoundingClientRect();
+  if(r.bottom > view.bottom)  elBuild.scrollTop += r.bottom - view.bottom + 4;
+  else if(r.top < view.top)   elBuild.scrollTop -= view.top - r.top + 4;
 }
 
 /* ---- did you clear it, and the one misdiagnosis this scenario is about ---- */
@@ -460,7 +489,8 @@ function renderRoleReport(){
 function renderResults(){
   elRes.innerHTML = '';
   elScore.textContent = score();
-  if(!GAME.results) return;
+  sizeResults();
+  if(!GAME.results){ keepActionableVisible(); return; }
   GAME.results.slice(0, GAME.reveal).forEach((r,i)=>{
     const el = document.createElement('div');
     el.className = 'cmp-res ' + (r.caught ? 'hit' : 'miss');
@@ -488,6 +518,9 @@ function renderResults(){
   }
   elRun.disabled = !done;
   elRes.scrollTop = elRes.scrollHeight;      /* follow the reveal */
+  /* the results just took their space back, so re-check the build list against
+     the height it actually has now */
+  keepActionableVisible();
 }
 
 /* ---- the change feed ---- */
@@ -507,6 +540,10 @@ function showScenario(){
   elTitle.textContent = sc ? sc.title
                        : GAME.role ? roleById(GAME.role).mission : DEFAULT_MISSION;
   elScore.textContent = '0';
+  /* the denominator belongs to the scenario, not to this file: waves and new
+     scenarios change how many steps come, and score() counts detections only —
+     containment is a separate component, and stage 08 exists to say so */
+  if(elScoreOf) elScoreOf.textContent = `/ ${activeChain().length} 検知`;
   elRun.disabled = false;
   /* who you are goes in the eyebrow, which costs no height. The hint is for the
      setup only — at 720p every line of prose here is a line the build list or
