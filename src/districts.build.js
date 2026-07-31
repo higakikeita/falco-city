@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, isFlow } from './layout.js';
+import { DEPLOYMENTS, byDeployId, nodeCount, nodeOffsets,
+         NODE_PAD_W, NODE_PAD_D, POD_PITCH } from './districts.data.js';
 import { edgeMat, box, edged, put, chevron, groundText } from './mesh.js';
 import { world } from './scene.js';
 
@@ -22,82 +24,119 @@ const outRefs   = { pipes:[] };
 const stateRefs  = { gantries:{} };
 /* west-end variants + the Sysdig Shield overlay, toggled by deploy / mode */
 const deployRefs = { wlK8s:null, wlHost:null, apiServer:null, clusterShield:null, hostShield:null };
+/* deployment id -> west-end group (null when that topology draws none) */
+const deployVariants = {};
 
-function BUILD_workloads(g,d,cx,cz){
-  /* Two completely different west ends, because a cluster and a single host
-     are not the same picture. Both are built once and toggled by setDeploy. */
+/* ---------- west-end variants, one per declared deployment ----------
+   A cluster and a single host are not the same picture, so the west end is
+   rebuilt rather than relabelled. Both shapes below read their node count,
+   pod count and process list from DEPLOYMENTS — nothing here knows the
+   number three. */
 
-  /* ---------- variant A: Kubernetes — three node pads in a cluster ---------- */
-  const k8s = new THREE.Group();
-  const NODE_Z = [-d.d/3.2, 0, d.d/3.2];
-  NODE_Z.forEach((nz, n)=>{
-    const pad = box(24, 0.9, 10.4, C.g10, 0.95);
-    put(pad, cx, 0.45, nz); k8s.add(pad);
+/* a cluster: N node pads, pods on each, one agent per node */
+function buildNodesVariant(dep, d, cx, cz){
+  const grp = new THREE.Group();
+  const pods = dep.podsPerNode ?? 0;
+  const n8 = nodeCount(dep);
+  nodeOffsets(n8).forEach((nz, n)=>{
+    const pad = box(NODE_PAD_W, 0.9, NODE_PAD_D, C.g10, 0.95);
+    put(pad, cx, 0.45, nz); grp.add(pad);
     const rim = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(24, 0.9, 10.4)),
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(NODE_PAD_W, 0.9, NODE_PAD_D)),
       edgeMat(C.g20, 0.7));
-    put(rim, cx, 0.45, nz); k8s.add(rim);
+    put(rim, cx, 0.45, nz); grp.add(rim);
 
-    // pods on the node
-    for(let c=0;c<5;c++){
-      const x = cx-9.6 + c*4.8;
+    for(let c=0;c<pods;c++){
+      const x = cx + (c - (pods-1)/2) * POD_PITCH;
       const h = 3.2 + ((n*7+c*13)%5)*1.5;
       const b = edged(3.2, h, 4.4, c%4===0 ? 0xF3C99A : C.g20, 0.52);
-      put(b, x, 0.9+h/2, nz); k8s.add(b);
+      put(b, x, 0.9+h/2, nz); grp.add(b);
       const a = box(0.9,0.9,0.9, c%3===0 ? C.orange : C.g40, 1);
-      put(a, x, 0.9+h+0.9, nz); k8s.add(a);
+      put(a, x, 0.9+h+0.9, nz); grp.add(a);
     }
-    // Host Shield / falco pod on every node — that is what a DaemonSet is
+    /* an agent on every node — that is what a DaemonSet is */
     const ds = edged(2.6, 2.6, 2.6, C.falco, 0.92);
-    put(ds, cx+11.0, 0.9+1.3, nz); k8s.add(ds);
-    k8s.add(groundText('node-'+(n+1), cx-13.6, nz, 1.7,
+    put(ds, cx+11.0, 0.9+1.3, nz); grp.add(ds);
+    grp.add(groundText('node-'+(n+1), cx-13.6, nz, 1.7,
       {color:'#8A8C8E', mono:true, opacity:0.95, y:0.12}));
   });
-  // cluster boundary
-  const cb = new THREE.Mesh(
-    new THREE.PlaneGeometry(30, 42),
-    new THREE.MeshBasicMaterial({color:C.falco, transparent:true, opacity:0.05, depthWrite:false}));
-  cb.rotation.x = -Math.PI/2; cb.position.set(cx, 0.02, cz); k8s.add(cb);
-  const cbl = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(30, 42)), edgeMat(C.falco, 0.5));
-  cbl.rotation.x = -Math.PI/2; cbl.position.set(cx, 0.03, cz); k8s.add(cbl);
-  k8s.add(groundText('KUBERNETES CLUSTER · 3 NODES · DAEMONSET', cx-14, d.z1+4, 2.0,
-    {color:'#00A8BC', mono:true, opacity:0.95}));
-  g.add(k8s);
 
-  /* ---------- variant B: one machine, no cluster ---------- */
-  const host = new THREE.Group();
-  const slab = box(26, 1.4, 34, C.g10, 0.96);
-  put(slab, cx, 0.7, cz); host.add(slab);
+  if(dep.cluster){
+    /* the boundary grows with the district, so more nodes stay enclosed */
+    const cw = NODE_PAD_W + 6, cd = d.d + 4;
+    const cb = new THREE.Mesh(
+      new THREE.PlaneGeometry(cw, cd),
+      new THREE.MeshBasicMaterial({color:C.falco, transparent:true, opacity:0.05, depthWrite:false}));
+    cb.rotation.x = -Math.PI/2; cb.position.set(cx, 0.02, cz); grp.add(cb);
+    const cbl = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(cw, cd)), edgeMat(C.falco, 0.5));
+    cbl.rotation.x = -Math.PI/2; cbl.position.set(cx, 0.03, cz); grp.add(cbl);
+  }
+  grp.add(groundText(dep.caption(n8), cx-14, d.z1+4, 2.0,
+    {color:'#00A8BC', mono:true, opacity:0.95}));
+  return grp;
+}
+
+/* one machine: a slab carrying named, taller processes and a single agent */
+function buildMachineVariant(dep, d, cx, cz){
+  const grp = new THREE.Group();
+  const sw = dep.slabW, sd = dep.slabD;
+  const slab = box(sw, 1.4, sd, C.g10, 0.96);
+  put(slab, cx, 0.7, cz); grp.add(slab);
   const slabRim = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(26, 1.4, 34)), edgeMat(C.g30, 0.6));
-  put(slabRim, cx, 0.7, cz); host.add(slabRim);
-  // fewer, taller, named host processes
-  const PROCS = [['systemd',13],['sshd',7],['nginx',16],['cron',5],
-                 ['postgres',19],['node',11],['dockerd',9],['rsyslog',6]];
-  PROCS.forEach(([nm,h],i)=>{
-    const x = cx - 9.5 + (i%4)*6.3;
-    const z = cz - 7.5 + Math.floor(i/4)*15;
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(sw, 1.4, sd)), edgeMat(C.g30, 0.6));
+  put(slabRim, cx, 0.7, cz); grp.add(slabRim);
+
+  const per = dep.procsPerRow;
+  const rows = Math.ceil(dep.procs.length / per);
+  dep.procs.forEach(([nm,h],i)=>{
+    const x = cx + ((i%per) - (per-1)/2) * 6.3;
+    const z = cz + (Math.floor(i/per) - (rows-1)/2) * 15;
     const b = edged(4.0, h, 5.0, i%3===0 ? C.g30 : C.g20, 0.55);
-    put(b, x, 1.4+h/2, z); host.add(b);
+    put(b, x, 1.4+h/2, z); grp.add(b);
     const a = box(1.2,1.2,1.2, C.g50, 1);
-    put(a, x, 1.4+h+1.0, z); host.add(a);
-    host.add(groundText(nm, x-2.4, z+3.4, 1.5,
+    put(a, x, 1.4+h+1.0, z); grp.add(a);
+    grp.add(groundText(nm, x-2.4, z+3.4, 1.5,
       {color:'#8A8C8E', mono:true, opacity:0.9, y:1.5}));
   });
-  // single Host Shield / falco.service
-  const svc = edged(4.4, 4.4, 4.4, C.falco, 0.92);
-  put(svc, cx+11.4, 1.4+2.2, cz); host.add(svc);
-  host.add(groundText('SINGLE HOST · falco.service (systemd)', cx-13, d.z1+4, 2.0,
-    {color:'#00A8BC', mono:true, opacity:0.95}));
-  g.add(host);
 
-  deployRefs.wlK8s = k8s;
-  deployRefs.wlHost = host;
+  const svc = edged(4.4, 4.4, 4.4, C.falco, 0.92);
+  put(svc, cx+11.4, 1.4+2.2, cz); grp.add(svc);
+  grp.add(groundText(dep.caption(nodeCount(dep)), cx-13, d.z1+4, 2.0,
+    {color:'#00A8BC', mono:true, opacity:0.95}));
+  return grp;
+}
+
+const SHAPES = { nodes:buildNodesVariant, machine:buildMachineVariant };
+
+function BUILD_workloads(g,d,cx,cz){
+  for(const dep of DEPLOYMENTS){
+    const make = SHAPES[dep.shape];
+    /* shape:'none' is a real answer — kernel-less has no syscall-emitting
+       west end to draw, so the district is left bare and dimmed */
+    const v = make ? make(dep, d, cx, cz) : null;
+    if(v){ v.visible = false; g.add(v); }
+    deployVariants[dep.id] = v;
+  }
+  /* Named handles kept for controls.js, which still toggles these two by name.
+     applyDeployment() below is the general replacement; moving the switch onto
+     it touches a shared file, so it is a separate PM-sequenced step. */
+  deployRefs.wlK8s  = deployVariants.k8s;
+  deployRefs.wlHost = deployVariants.host;
 
   g.add(groundText('SYSCALLS', cx-1, d.z1+8, 5.0, {color:'#BBBDBF', opacity:0.4}));
   g.add(groundText('kernel boundary →', d.x1+3, d.z0-5, 2.6,
     {color:'#A3A5A7', mono:true, opacity:0.9}));
+}
+
+/* Show exactly the west end a deployment declares. Works for any number of
+   declared topologies, including ones with no button yet. */
+function applyDeployment(id){
+  const dep = byDeployId(id);
+  for(const k in deployVariants)
+    if(deployVariants[k]) deployVariants[k].visible = k === id;
+  if(deployRefs.apiServer) deployRefs.apiServer.visible = !!dep?.apiServer;
+  return dep;
 }
 
 function BUILD_driver(g,d,cx,cz){
@@ -401,6 +440,8 @@ const BUILDERS = {
 
 export {
   BUILDERS,
+  applyDeployment,
+  deployVariants,
   driverSlabs,
   RING_LANES,
   RULE_BLOCKS,
