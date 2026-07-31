@@ -30,7 +30,7 @@ import { updateVerdict } from '../../src/ui.js';
 import { evaluate, CHAIN, RESPONSE, DEPS, BUILD_ORDER, OWNER, ROLES, blameOf,
          SCENARIOS, startScenario, activeChain, activeWaves, waveCount,
          goalStatus, passResults, runAttack, tickReveal, build, requestBuild,
-         satisfy, canUseLever } from '../../src/campaign.js';
+         buildOrAsk, fixOrAsk, canUseLever, allowedDrivers } from '../../src/campaign.js';
 import { step, spawn, N } from '../../src/sim.js';
 import { DISTRICTS } from '../../src/layout.js';
 import { DEPLOYMENTS, ORCH, NODE_OSES, SOCKETS, K8S_METAS, DRIVERS,
@@ -768,19 +768,12 @@ function walkPass(){
   throw new Error(`パスが ${waveCount()} 波で終わらない（phase ${GAME.phase}）`);
 }
 
-/* A generic play-through: fix what the role is allowed to fix, build what the
-   achievable steps need, ask another team for the rest. No scenario-specific
-   knowledge — if a scenario cannot be cleared this way it is either unclearable
-   or it needs a lever the role does not hold, and both are content bugs. */
-function solve(sc){
-  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
-
-  if(canUseLever('tuning')){
-    if(S.tune.slowOutput) S.tune.slowOutput = false;
-    if(S.tune.syscallSet === 'all') S.tune.syscallSet = 'default';
-    if(model().burst > 0) S.tune.bufPreset = 10;
-  }
-
+/* What this scenario needs standing: the districts every achievable step
+   requires, plus containment if the goal asks for it, closed over dependencies.
+   NOT everything — building 08 Sysdig when the goal does not ask for
+   containment costs an ask the SRE cannot afford (`slow-output` allows zero),
+   and a play-through that overspends the ask budget is not a play-through. */
+function neededBuilds(sc){
   const want = new Set();
   for(const s of activeChain()){
     if((s.needsCaps || []).some(c => !hasCap(c))) continue;   /* この環境では起こり得ない */
@@ -794,11 +787,37 @@ function solve(sc){
         if(!want.has(d)){ want.add(d); grew = true; }
     if(!grew) break;
   }
-  for(const id of BUILD_ORDER){
-    if(!want.has(id) || GAME.built.has(id)) continue;
-    if(GAME.role === null || OWNER[id] === GAME.role) build(id);
-    else requestBuild(id);
+  return want;
+}
+
+/* Do the build work and nothing else: build what is needed, and satisfy the
+   conditions this situation left unsatisfied on districts that are standing.
+   Uses the real moves (buildOrAsk / fixOrAsk), so ownership and the ask count
+   come out the way they would for a player, and `between` is exercised the way
+   a player would exercise it. */
+function buildWork(sc){
+  const want = neededBuilds(sc);
+  for(const id of BUILD_ORDER)
+    if(want.has(id) && !GAME.built.has(id)) buildOrAsk(id);
+  for(const [id, reqs] of Object.entries(GAME.unmet))
+    if(GAME.built.has(id))
+      for(const req of reqs.slice()) fixOrAsk(id, req);
+}
+
+/* A generic play-through: fix what the role is allowed to fix, build what the
+   achievable steps need, ask another team for the rest. No scenario-specific
+   knowledge — if a scenario cannot be cleared this way it is either unclearable
+   or it needs a lever the role does not hold, and both are content bugs. */
+function solve(sc){
+  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+
+  if(canUseLever('tuning')){
+    if(S.tune.slowOutput) S.tune.slowOutput = false;
+    if(S.tune.syscallSet === 'all') S.tune.syscallSet = 'default';
+    if(model().burst > 0) S.tune.bufPreset = 10;
   }
+
+  buildWork(sc);
 
   assert(goalStatus() === null, `${sc.id}: 走る前から判定が出ている`);
   walkPass();
@@ -856,6 +875,184 @@ check('シナリオはどれも JSON を往復できる（純データ）', () =
     assert(JSON.stringify(round) === JSON.stringify(sc), `${sc.id} が JSON を往復できない`);
   }
   return `${SCENARIOS.length} 本すべて JSON.stringify → parse で不変`;
+});
+
+/* ------------------------------------------------------------------ *
+ * 6a. lever exclusivity — SHIP GATE G4
+ * ------------------------------------------------------------------ *
+ * "Every registered scenario is clearable" (above) only checks one direction.
+ * A scenario that can ALSO be cleared by a lever with nothing to do with its
+ * symptom teaches nothing: the player turns knobs, the goal goes green, and the
+ * misdiagnosis the file exists to walk them into never happens. Playtesting
+ * found `slow-output` clears with `base_syscalls: custom` and with NODE LOAD
+ * ×0.5 while `slowOutput` is still true — the exact opposite of its claim.
+ *
+ * So the other direction gets pinned too: for each scenario, every single move
+ * the player could make is tried, and CLEARING is only allowed for moves the
+ * scenario declares as its answer.
+ *
+ * Three things make this cheap to keep true as content grows:
+ *
+ *   - permission comes from the game. A move is only tried when
+ *     canUseLever(group) says the player holds it, so `goal.lockLoad` and a
+ *     locked role remove moves from the test automatically — closing a loophole
+ *     in the CONTENT closes it here with no edit
+ *   - the answer is read from the scenario if it declares one (`insight.lever`),
+ *     and from the table below if it does not. A scenario nobody has classified
+ *     fails with instructions rather than passing quietly
+ *   - building what is missing is always legitimate, so it is never a violation.
+ *     What is a violation is a scenario whose declared cause turns out not to
+ *     matter: if the answer includes a lever, then building everything and
+ *     touching nothing must NOT clear it
+ */
+G('レバー排他性 — 意図したレバー以外でクリアできない (GATE G4)');
+
+/* Which lever each scenario's answer actually is, by TUNE key (or `load` /
+   `stack` / `driver`). An empty list means "the answer is to build what is
+   missing" — including 08 Sysdig, because build('sysdig') flips STACK itself.
+   The permanent home for this is the scenario file (BOARD §2: `insight.lever`
+   in scenarios/schema.js, owned by the rules lane); until it exists this table
+   is the register, and it is read only as a fallback. */
+const INTENDED_LEVER = {
+  'greenfield':              [],                 /* 依存順に建てる */
+  'inherited-all-syscalls':  ['syscallSet'],     /* 引き継いだ all を戻す */
+  'slow-output':             ['slowOutput'],     /* 出力を非同期にする */
+  'standalone-k8s-rules':    [],                 /* 建てる／依頼する。環境は動かせない */
+  'eyes-but-no-hands':       [],                 /* 08 を建てる（STACK は build が倒す）*/
+  'a-different-source':      [],                 /* 07 プラグイン入力を建てる */
+  /* 未登録の3本。登録された瞬間にこの検査の対象になる（INVARIANTS §8）*/
+  'silent-blind-spot':       ['syscallCustom'],  /* 負の指定を外す */
+  'nodes-are-not-buffers':   ['cpusPerBuf'],     /* 小さいノードに合わせて割り直す */
+  'rules-not-followed':      []                  /* 09 ルール配布を建てる */
+};
+const intendedOf = sc => Array.isArray(sc.insight && sc.insight.lever)
+  ? sc.insight.lever : INTENDED_LEVER[sc.id];
+
+/* Single moves, as a player makes them. Every one of these is a real widget:
+   TUNING rows, NODE LOAD, STACK, DRIVER. */
+const MOVES = [
+  {key:'syscallSet',   group:'tuning', jp:'base_syscalls=custom（絞る）', run(){ S.tune.syscallSet='custom'; }},
+  {key:'syscallSet',   group:'tuning', jp:'base_syscalls=default',        run(){ S.tune.syscallSet='default'; }},
+  {key:'syscallSet',   group:'tuning', jp:'base_syscalls=all（広げる）',  run(){ S.tune.syscallSet='all'; }},
+  {key:'syscallCustom',group:'tuning', jp:'custom_set を空にする',        run(){ S.tune.syscallCustom=[]; }},
+  {key:'bufPreset',    group:'tuning', jp:'buf_size_preset=10',           run(){ S.tune.bufPreset=10; }},
+  {key:'cpusPerBuf',   group:'tuning', jp:'cpus_for_each_buffer=6',       run(){ S.tune.cpusPerBuf=6; }},
+  {key:'cpusPerBuf',   group:'tuning', jp:'cpus_for_each_buffer=1',       run(){ S.tune.cpusPerBuf=1; }},
+  {key:'slowOutput',   group:'tuning', jp:'出力を非同期にする',            run(){ S.tune.slowOutput=false; }},
+  {key:'dropAction',   group:'tuning', jp:'syscall_event_drops=ignore',   run(){ S.tune.dropAction='ignore'; }},
+  {key:'syscallRepair',group:'tuning', jp:'repair=false',                 run(){ S.tune.syscallRepair=false; }},
+  {key:'load',         group:'load',   jp:'NODE LOAD ×0.5',               run(){ S.load=Math.max(0.1, S.load*0.5); }},
+  {key:'load',         group:'load',   jp:'NODE LOAD 最小',               run(){ S.load=0.1; }},
+  {key:'stack',        group:'stack',  jp:'STACK=sysdig',                 run(){ setMode('sysdig'); }},
+  {key:'driver',       group:'driver', jp:'DRIVER=modern_ebpf',           run(){ S.driver='modern_ebpf'; },
+   ok:() => allowedDrivers().includes('modern_ebpf')},
+  {key:'driver',       group:'driver', jp:'DRIVER=kmod',                  run(){ S.driver='kmod'; },
+   ok:() => allowedDrivers().includes('kmod')}
+];
+
+/* one attempt: enter the scenario, optionally do the build work, optionally make
+   one move, then walk the pass. null = that move is not available to this
+   player, which is not a loophole. */
+function attempt(sc, {build:doBuild = false, move = null} = {}){
+  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+  if(doBuild) buildWork(sc);
+  if(move){
+    if(!canUseLever(move.group)) return null;
+    if(move.ok && !move.ok()) return null;
+    move.run();
+  }
+  walkPass();
+  const st = goalStatus();
+  return !!(st && st.cleared);
+}
+
+/* Known violations, with the lane that owns the fix. Everything NOT listed here
+   is asserted; the gap() below fails as soon as a listed one is fixed, so the
+   list can only shrink. */
+const LEVER_PENDING = {
+  'slow-output': 'base_syscalls を絞っても NODE LOAD を下げてもクリアできる（slowOutput は true のまま）。'
+    + '塞ぐのはシナリオ側の宣言で足りる — goal.minPassRatio（絞って逃げるのを拒む）と '
+    + 'goal.lockLoad（負荷は状況であって処置ではない）は schema.js に既にある。BOARD #10',
+  'inherited-all-syscalls': 'NODE LOAD を下げるだけでクリアできる（syscallSet は all のまま）。'
+    + 'util = 流入/消費能力 なので、分子を負荷側から下げても同じところに着く — '
+    + '**この検査が新しく見つけた分**で、#10 と同じ穴。goal.lockLoad で塞がる'
+};
+
+/* every scenario has to be classified, or this check is quietly not running */
+check('シナリオの「正解のレバー」が全部宣言されている', () => {
+  const missing = SCENARIOS.filter(sc => intendedOf(sc) === undefined);
+  assert(missing.length === 0,
+    `正解のレバーが未宣言: ${missing.map(s=>s.id).join(' / ')}`
+    + '。scenarios/schema.js に insight.lever が入るまでは '
+    + 'scripts/harness/cases.mjs の INTENDED_LEVER に足すこと（建てるだけが答えなら空配列）。'
+    + 'これが空欄のまま増やせると G4 は新しいシナリオを検査しない');
+  const byLever = SCENARIOS.filter(sc => intendedOf(sc).length);
+  return `${SCENARIOS.length} 本すべて宣言済み — レバーが答えなのは ${byLever.length} 本`
+       + `（${byLever.map(s=>`${s.id}: ${intendedOf(s).join('+')}`).join(' · ')}）·`
+       + ` 残りは建てるのが答え`;
+});
+
+check('意図したレバー以外ではクリアできない（G4）', () => {
+  const violations = [], lines = [];
+  for(const sc of SCENARIOS){
+    const intended = intendedOf(sc);
+    const tried = [], clears = [];
+    /* 手を打たずに、あるいは建てるだけでクリアできてはならない
+       —— レバーが答えのシナリオに限る（建てるのが答えなら建てて当然クリアする）*/
+    if(intended.length){
+      const buildOnly = attempt(sc, {build:true});
+      if(buildOnly) violations.push(`${sc.id}: 建てるだけでクリアできる`
+        + `（宣言された原因 ${intended.join('+')} が採点に効いていない）`);
+    }
+    for(const m of MOVES){
+      if(intended.includes(m.key)) continue;         /* 正解のレバーは対象外 */
+      /* 2通り試す: 引き継いだ状態からその1手だけ、と、建てた上でその1手だけ。
+         後者は「建てる必要もあるシナリオ」で抜け道が隠れるのを防ぐ */
+      for(const build of intended.length ? [false, true] : [false]){
+        const got = attempt(sc, {build, move:m});
+        if(got === null) continue;                   /* この役割には無い手 */
+        tried.push(m.jp);
+        if(got) clears.push(`${m.jp}${build ? '（建てた上で）' : ''}`);
+      }
+    }
+    if(clears.length){
+      const known = LEVER_PENDING[sc.id];
+      const line = `${sc.id}: ${[...new Set(clears)].join(' / ')} でクリアできる`
+                 + `（正解は ${intended.length ? intended.join('+') : '建てること'}）`;
+      if(known) lines.push(`保留 ${line}`);
+      else violations.push(line);
+    } else {
+      lines.push(`${sc.id}: ${new Set(tried).size} 手すべて不成立（正解 `
+               + `${intended.length ? intended.join('+') : '建てること'}）`);
+    }
+  }
+  assert(violations.length === 0, violations.join(' ／ '));
+  return `${SCENARIOS.length} 本 · ${MOVES.length} 手\n         ` + lines.join('\n         ');
+});
+
+check('正解のレバーでは実際にクリアできる', () => {
+  const lines = [];
+  for(const sc of SCENARIOS){
+    const intended = intendedOf(sc);
+    if(!intended.length) continue;                  /* 建てるだけが答え = G3 が見ている */
+    assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+    buildWork(sc);
+    /* 宣言された逸脱を既定に戻す。これが「正解の手」*/
+    for(const k of intended){
+      assert(canUseLever(k === 'load' ? 'load' : k === 'stack' ? 'stack' : 'tuning'),
+        `${sc.id}: 正解のレバー ${k} をこの役割が持っていない`);
+      if(k === 'load') S.load = 1.0;
+      else if(k === 'stack') setMode('sysdig');
+      else S.tune[k] = Array.isArray(TUNE_DEFAULTS[k])
+        ? TUNE_DEFAULTS[k].slice() : TUNE_DEFAULTS[k];
+    }
+    walkPass();
+    const st = goalStatus();
+    assert(st && st.cleared, `${sc.id}: 正解のレバー（${intended.join('+')}）を戻してもクリアできない`
+      + ` — ${st ? st.items.map(i=>`${i.key} ${i.actual}${i.ok?'':'✗'}`).join(' ') : '判定が出ない'}`);
+    lines.push(`${sc.id}: ${intended.join('+')} を既定に戻す → クリア`);
+  }
+  return lines.join(' · ') || '（レバーが答えのシナリオが無い）';
 });
 
 /* ------------------------------------------------------------------ *
@@ -999,18 +1196,6 @@ check('埋没の帰属は入力を増やした側に付く（§9.6）', () => {
  * ------------------------------------------------------------------ */
 G('ウェーブ (§9)');
 
-/* everything standing AND working: build what is missing, satisfy the conditions
-   a scenario handed over unsatisfied. Uses the real moves, so `between` is
-   exercised the way a player would exercise it. */
-function standUp(){
-  for(const id of BUILD_ORDER){
-    if(GAME.built.has(id)) continue;
-    if(GAME.role === null || OWNER[id] === GAME.role) build(id);
-    else requestBuild(id);
-  }
-  for(const [id, reqs] of Object.entries(GAME.unmet))
-    for(const req of reqs.slice()) satisfy(id, req);
-}
 /* the scenarios that actually declare more than one wave */
 const multiWave = SCENARIOS.filter(s => startScenario(s.id) && waveCount() > 1);
 
@@ -1032,7 +1217,7 @@ check('波は境界で止まり、間に打った手が次の波に効く（旧 
 
   /* between が手番。ここで打った手は次の波に効くが、失った波は戻らない */
   const runsBefore = GAME.runs;
-  standUp();
+  buildWork(sc);
   assert(GAME.phase === 'between', `手を打ったら phase が ${GAME.phase} に戻った`);
   assert(GAME.waveLog.length === 1, '手を打ったら解決済みの波が消えた');
   assert(GAME.waveLog[0].results.map(r => `${r.id}:${r.caught}`).join() === before.split(' ').join(),
@@ -1052,7 +1237,7 @@ check('波は境界で止まり、間に打った手が次の波に効く（旧 
 check('判定はパスが終わるまで出ない（§9.8）', () => {
   const sc = multiWave[0];
   assert(startScenario(sc.id), `${sc.id}: 起動できない`);
-  standUp();
+  buildWork(sc);
   assert(goalStatus() === null, `build 中に判定が出た（phase ${GAME.phase}）`);
   const seen = [];
   for(let i=0; i<waveCount(); i++){
@@ -1071,7 +1256,7 @@ check('判定はパスが終わるまで出ない（§9.8）', () => {
 check('ドロップの予算はパス単位（波ごとには盗まれない・§9.9）', () => {
   const sc = multiWave[0];
   assert(startScenario(sc.id), `${sc.id}: 起動できない`);
-  standUp();
+  buildWork(sc);
   /* 過負荷にする。レバーではなく状況として置くので S.load を直接動かす
      （lockLoad なシナリオでも「そういう estate だった」は表現できる） */
   S.load = 3.0;
@@ -1207,6 +1392,23 @@ gap('repair:false に代償が無い（意図的・§2.5）', 'Phase 1', () => {
        + '§2.5 のとおり repair が戻すのは状態エンジンの整合性だけなので、'
        + '検知の枚数として表現するものではない — 現時点では意図的に未採点。'
        + '入れるなら §2.6（プロセスキャッシュの GC 失敗・ログの欠損）として';
+});
+
+gap('意図しないレバーでクリアできるシナリオが残っている（GATE G4）',
+    'コンテンツ／ルール（BOARD #10）', () => {
+  const open = Object.keys(LEVER_PENDING).filter(id => SCENARIOS.some(s => s.id === id));
+  assert(open.length > 0,
+    'LEVER_PENDING に載っているシナリオが1本も登録されていない — 表を掃除すること');
+  for(const id of open){
+    const sc = SCENARIOS.find(s => s.id === id);
+    const intended = intendedOf(sc);
+    const clears = MOVES.filter(m => !intended.includes(m.key))
+      .filter(m => attempt(sc, {build:true, move:m}) === true);
+    assert(clears.length > 0,
+      `${id} は意図したレバー以外でクリアできなくなった — GAP は閉じている。`
+      + 'LEVER_PENDING から消せば G4 が本物の assert になる');
+  }
+  return open.map(id => `${id}: ${LEVER_PENDING[id]}`).join(' ／ ');
 });
 
 gap('step3 の Write below etc は sandbox なのに同梱扱い（§4.3 / §4.4）',
