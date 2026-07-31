@@ -191,7 +191,9 @@ const CSS = `
    built yet. So an unbuilt stage is no longer absent from the overlay — it is
    drawn as a surveyed plot, dashed and numbered, and the one you can build
    right now is lit. "Not there" and "build this next" now look different. */
-.tag.plot{background:rgba(255,255,255,.74);border:1px dashed var(--grey-30);
+/* below the overlay panels (.ui is z-index 10): a plot marker is scenery, and
+   it must never sit on top of the controls the way a built label may */
+.tag.plot{z-index:9;background:rgba(255,255,255,.74);border:1px dashed var(--grey-30);
   color:var(--grey-50);font-size:10px;letter-spacing:.09em;padding:3px 8px}
 .tag.plot .pn{color:var(--grey-40);margin-right:7px}
 .tag.plot .cta{margin-left:8px;color:var(--grey-30);font-size:9px;letter-spacing:.13em}
