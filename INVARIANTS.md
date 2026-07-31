@@ -55,7 +55,7 @@
 
 | # | 主張 | 出典 | 実装 | テスト |
 |---|---|---|---|---|
-| 3.1 | ✅ GKE（Container-Optimized OS）では**カーネルモジュールを挿入できない** → modern eBPF（Falco 0.38+ の既定） | [Falco: Specific Environments](https://falco.org/docs/setup/enviroments/)「Falco cannot insert its Kernel Module to process events for system calls」 | `src/districts.data.js` §NODE_OSES `cos.blocks:['kmod']` | kmod が不可なのは COS のときだけ／COS を選ぶと生きているレバーからも kmod が落ちる |
+| 3.1 | ✅ GKE（Container-Optimized OS）では**カーネルモジュールを挿入できない** → modern eBPF。**⚠️ 2026-07-31 に弱めました**: 以前この行は「Falco 0.38+ の既定」と括弧書きしていましたが、**引いている出典は GKE と kmod の話で、版を名指ししていません**。一次資料が言えるのは「**現行の `falco.yaml` が `engine.kind: modern_ebpf` を出荷している**」と「kernel drivers ページが Modern eBPF を `(default)` と書いている（版は無し）」まで。0.38 のリリースノートの言い方は「falcoctl がシステムを判定して最も互換なドライバを自動選択する」で、**「0.38 で既定になった」は出典が無い**（データ層が `status:'weak'` として報告・こちらで確認） | [Falco: Specific Environments](https://falco.org/docs/setup/enviroments/)（GKE のみ）／[falco.yaml `engine.kind`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)（現行の既定）／[kernel drivers](https://falco.org/docs/concepts/event-sources/kernel/)（`(default)` 表記・版なし） | `src/districts.data.js` §NODE_OSES `cos.blocks:['kmod']` | kmod が不可なのは COS のときだけ／COS を選ぶと生きているレバーからも kmod が落ちる |
 | 3.2 | ✅ **「managed k8s では kmod が使えない」は言い過ぎだった（実装で解消）。** 決めているのは *managed かどうか* ではなく **ノード OS がモジュール挿入を許すか**（COS 不可・Secure Boot は未署名モジュールを拒否・Bottlerocket は kmod kit があり Sysdig は kmod / eBPF の両方を選べると書いている）。環境は直交4軸（orchestrator / node OS / runtime socket / k8smeta）になり、`kmod` を落とすのは node OS 軸だけ | [Specific Environments](https://falco.org/docs/setup/enviroments/)（GKE のみが一次出典）／[Sysdig: Bottlerocket](https://www.sysdig.com/blog/secure-monitor-aws-bottlerocket)（kmod と eBPF の両方）／[Understand Agent Drivers](https://docs.sysdig.com/en/sysdig-secure/classic-agent-drivers/) | `src/districts.data.js` §ENV_AXES / `composeEnv` / `DEPLOYMENTS.kmodOk` | kmod が不可なのは COS のときだけ（orchestrator 5値と独立に検査）／4軸は直交 |
 | 3.3 | ✅ kmod は full privileges 必須（kernel ≥ 3.10）。modern eBPF は kernel ≥ 5.8 ＋ BTF ＋ BPF ring buffer で、capabilities（`CAP_BPF` / `CAP_PERFMON` / `CAP_SYS_RESOURCE` / `CAP_SYS_PTRACE`）で動く | [Falco: kernel drivers](https://falco.org/docs/concepts/event-sources/kernel/) | 未実装 | — |
 | 3.4 | ✅ **managed クラスタでは webhook 方式の `k8saudit` が使えない。** cloud provider が audit log を自分のログサービスに出すため、provider 別プラグインで**取りに行く**（`k8saudit-eks` は CloudWatch Logs から pull） | [Monitoring your EKS clusters audit logs](https://falco.org/blog/k8saudit-eks-plugin/)／[k8saudit README](https://github.com/falcosecurity/plugins/blob/main/plugins/k8saudit/README.md)（webhook backend or file） | 未実装（地区07 は入力元を区別していない） | — |
@@ -77,6 +77,7 @@
 | 4.3 | ⚠️ **成熟度の取り違えは1件ではなく2件で、向きが逆だった。** ①step4「/tmp に落としたバイナリを実行する」＝`Drop and execute new binary in container` は `maturity_stable` ＝**同梱されている**のに falcoctl を要求していた（**修正済み** — `imds` 段が falcoctl の主張を引き受け、step4 は素の stable 検知になった）。②step3「/etc/cron.d に書き込む」＝`Write below etc` は `maturity_sandbox` ＝**同梱されていない**のに、既定で鳴る扱いになっている（**未修正** — コンテナレーンが step3 ↔ step4 の入れ替えで両方同時に直す。id `cron` / `dropbin` は6シナリオが `attack.waves` から参照しているので据え置き） | [falcosecurity/rules `falco_rules.yaml`](https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml)（stable にあるもの）／[falco-sandbox_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-sandbox_rules.yaml)（`Write below etc`） | `src/campaign.js` CHAIN `cron`（falcoctl を要求していない）／`imds`（要求する） | 同梱されないルールだけが 09 ルール配布を要求する（`cron` は `MATURITY_PENDING` で保留）／GAP 6.6 |
 | 4.4 | ⚠️ **訂正**: 「現行チェーンの4ルールはすべて stable」は**誤り**。`Write below etc` は **`maturity_sandbox`**（`falco-sandbox_rules.yaml`）。stable なのは `Terminal shell in container` / `Read sensitive file untrusted` / `Contact K8S API Server From Container` の3本と、4.3 で入れ替わった `Drop and execute new binary in container` | 同上 | `scripts/harness/cases.mjs` §RULE_MATURITY が段ごとの成熟度を持つ | チェーンの各段のルールは成熟度が分かっている（未登録のルールを増やすと赤くなる） |
 | 4.5 | ✅ falcoctl の例に使えるのは incubating の実物: `Contact EC2 Instance Metadata Service From Container`（IMDS からの資格情報窃取）/ `Exfiltrating Artifacts via Kubernetes Control Plane` / `Backdoored library loaded into SSHD (CVE-2024-3094)` | [falco-incubating_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-incubating_rules.yaml) | **実装済み**: `CHAIN` の `imds` 段が `Contact EC2 Instance Metadata Service From Container` で `needs` に `falcoctl` を含む | 既定同梱のルールセットに無い検知は falcoctl なしでは持てない（`imds`=incubating）／同梱されないルールだけが 09 ルール配布を要求する |
+| 4.6 | ✅ **個々のルールの成熟度は、そのルールが `falcosecurity/rules` のどのファイルに居るかで決まる**（4.1）。**2026-07-31 に3本を実物で確認**: `Clear Log Activities` は **`maturity_stable`**（`rules/falco_rules.yaml`）／`Change thread namespace` は **`maturity_incubating`**（`rules/falco-incubating_rules.yaml`）／`Packet socket created in container` は **`maturity_stable`**（`rules/falco_rules.yaml`）。**`Clear Log Activities` を incubating とした判断は誤り**（画面レーンの自己判断・出典なし）。ファイルと `maturity_*` タグの 1:1 も同時に実測（stable 25本 / incubating 31本 / sandbox 37本・**タグの混在は1本も無い**） | [falco_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml)（`Clear Log Activities` / `Packet socket created in container`）／[falco-incubating_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-incubating_rules.yaml)（`Change thread namespace`・`tags: [maturity_incubating, host, container, process, mitre_privilege_escalation, T1611]`） | `scripts/harness/cases.mjs` §RULE_MATURITY | チェーンの各段のルールは成熟度が分かっている／同梱されないルールだけが 09 ルール配布を要求する |
 
 ## 5. OSS と Sysdig の境界
 
@@ -164,3 +165,75 @@ slow output の行だけモデルの真値（19.8%）になりました。6.3 �
 | 9.7 | ✅ 攻撃は**波で来て、境界で止まる**（`build → running → between → over`）。`between` は**手番**で、建設・再チューニング・依頼がそこで効き、次の波がそれを迎える。**ただし失った波は戻らない** — 解決済みの波の結果は書き換わらない | 模型の設計（旧 GAP 6.5） | `src/campaign.js` `runWave()` / `bankWave()` / `afterMove()` | 波は境界で止まり、間に打った手が次の波に効く |
 | 9.8 | ✅ 採点は「**来たもの全部**」に対して1回。`goalStatus()` は**パスが終わるまで判定を返さない**ので、1波目だけを見て勝敗は決まらない | 模型の設計 | `goalStatus()` が `GAME.phase !== 'over'` で `null` | 判定はパスが終わるまで出ない |
 | 9.9 | ✅ 過負荷が盗めるのは**パスにつき1段**（波ごとではない）。波を歩いても、チェーン全体を一度に評価していた頃と**同じ枚数**しか落ちない — これが README §実測した進行 / §実測した帰属 を真に保つ | 模型の設計 | `GAME.budget` = `freshBudget()`（`runAttack()` がパスの頭で1つ作る） | ドロップの予算はパス単位（波ごとには盗まれない・ring を通る波が2本以上ある状態で固定） |
+
+---
+
+## 10. バージョンと時間軸（第2部の背骨・2026-07-31 固定）
+
+`GAME-DESIGN.md` §3 の「**上げないと詰む**」を支える事実です。**発注書には確定として書かれていましたが
+出典が固定されていなかった2件**を含みます。**片方は「日付」ではなく「版」でした。**
+
+> **要点: クロックが2本あります。** Falco（**版**で消える）と Sysdig（**日付**で消える）。
+> 同じ「legacy eBPF」という名前ですが、別の製品の別の廃止です。混ぜると進行の設計が狂います。
+
+| # | 主張 | 出典 | 実装 | テスト |
+|---|---|---|---|---|
+| 10.1 | ✅ **Falco の版と実リリース日は実在する**（我々が作るものではない・維持コスト0のコンテンツ）。**梯子は11段**: 0.34.0 = 2023-02-07 / 0.35.0 = 2023-06-07 / 0.36.0 = 2023-09-26 / **0.37.0 = 2024-01-30** / 0.38.0 = 2024-05-30 / 0.39.0 = 2024-10-01 / **0.40.0 = 2025-01-28** / 0.41.0 = 2025-05-29 / 0.42.0 = 2025-10-22 / **0.43.0 = 2026-01-28** / **0.44.0 = 2026-05-26**。最新安定版は **0.44.1 = 2026-06-11**。パッチ版も実在（0.37.1 / 0.38.1 / 0.38.2 / 0.39.1 / 0.39.2 / 0.41.1 / 0.41.2 / 0.41.3 / 0.42.1 / 0.43.1）。**11段すべてこのレーンとデータ層が独立に実測して一致**（releases API・prerelease 除外）。版の間隔も実在するので、ゲーム内時間の刻みを実際の間隔に合わせられます | [falcosecurity/falco releases](https://github.com/falcosecurity/falco/releases)（タグごとに `published_at` を実測） | `src/versions.js` §VERSIONS（11段） | バージョンのリリース日が一次資料と一致する（`cases-freeplay.mjs`・梯子が時間順であることも） |
+| 10.2 | ✅ **Falco の legacy eBPF プローブは「廃止予定」ではなく、もう無い。** 0.43.0 で**非推奨** → **0.44.0 で削除**（`chore!: drop legacy BPF probe` #3796・`!` = breaking）。現行 `falco.yaml` の engine は **`kmod` / `modern_ebpf` / `replay` / `nodriver` の4つだけ**で、`ebpf` は選択肢として存在しない。**つまり Falco 側は「日付で詰む」のではなく「版を上げた瞬間に選択肢が消える」**。⚠️ **出典の使い分けに注意**（データ層の指摘・こちらで確認）: **削除が 0.44.0 で起きたことの出典は 0.44.0 のリリースブログと CHANGELOG であって、deprecation proposal ではありません。** proposal は「0.44.0 より前には消さない」という**下限しか定めておらず、削除そのものを予定していない**と本文で明言しています（"doesn't detail any aspect of the eventual removal"）。**片方を他方の出典にしないこと** | [Falco 0.44.0 リリースブログ](https://falco.org/blog/falco-0-44-0/)／[Falco CHANGELOG](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)（v0.43.0 の #3763 / v0.44.0 の #3796）／[falco.yaml `engine`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「Available engines: `kmod` / `modern_ebpf` / `replay` / `nodriver`」 | `src/versions.js` §DRIVER_LIFECYCLE `ebpf.removedIn = '0.44.0'`（`retiredOn` は持たない） | legacy eBPF は Falco では版で消え、Sysdig では日付で消える（混在が無いことも） |
+| 10.3 | ✅ **Sysdig の Legacy eBPF ドライバには日付がある。** Docs の Deprecation Notice が「This driver will be retired on **December 4, 2026**. We recommend migrating to Universal eBPF.」。カーネル下限も同じ表にある: **Universal eBPF ≥ 5.8**（ヘッダ不要）/ **kmod ≥ 3.10**（ヘッダ必要）/ **Legacy eBPF ≥ 4.14**（ヘッダ必要）。**発注書の「2026-12-04 廃止」はこれで正しい** — ただし **Sysdig の話**で、Falco の 10.2 とは別物 | [Sysdig: Understand Agent Drivers](https://docs.sysdig.com/en/sysdig-secure/classic-agent-drivers/) | 未実装 | 未実装（`versions.js` 待ち） |
+| 10.4 | ⚠️ **「`k8smeta` は Falco 0.40+ を要求」は現行プラグインについては正しく、「0.40 未満では `k8smeta` が使えない」は誤り。** README が「This plugin requires Falco with version >= **0.40.0**. For older Falco version (>= **0.37.0**) please use plugin version **0.2.x**」と両方書いています。**下限は2段**: どの `k8smeta` でも 0.37.0 以上、**現行（0.3.x 以降・最新 v0.4.1）**なら 0.40.0 以上。**0.37〜0.39 の谷は「直せない」ではなく「取り残されていく」**（プラグイン 0.2.x 系列に留まる ＝ 新しい版の修正と機能が来ない）。**進行の圧としてはこちらの方が正確で、しかもきつい** — 壊れて止まるのではなく、直せているつもりで置いていかれる形なので | [k8smeta plugin README §Running](https://github.com/falcosecurity/plugins/blob/main/plugins/k8smeta/README.md)／[k8smeta CHANGELOG](https://github.com/falcosecurity/plugins/blob/main/plugins/k8smeta/CHANGELOG.md)（v0.4.1） | `src/versions.js` §PLUGINS | k8smeta の下限は2段ある |
+| 10.5 | ✅ **「上げると壊れる」の実体は 0.37.0（2024-01-30）**: 内蔵 Kubernetes クライアントが廃止され、旧 `k8s.*` フィールド（`k8s.pod.*` / `k8s.ns.name` を除く）が `<NA>` を返すようになった（§3.7）。**戻す手は `k8smeta` プラグイン ＋ `k8s-metacollector` を建てること**で、その下限が 10.4。**V6（バージョンを上げて何かが壊れ、戻す手がある）はこの1件だけで成立します** | §3.7 と同じ（[Introducing Falco 0.37.0](https://falco.org/blog/falco-0-37-0/)） | `src/districts.data.js` の k8smeta 軸（版と結びついていない） | 4軸は直交（現行）／版との連動は `versions.js` 待ち |
+| 10.6 | ✅ **0.44.0 で消えたのは legacy eBPF だけではない。** 同じ版で **gRPC 出力とサーバ**（`chore!: drop gRPC output and server support` #3798）と **gVisor エンジン**（`chore!: drop gVisor engine support` #3797）も落ちています。3つとも `!` 付き。0.43.0 の非推奨は3点セット（legacy eBPF プローブ / gVisor / gRPC・#3763）で、**0.44.0 がその回収**。**「上げると何かが無くなる」は1件の事故ではなく、この版の性格です** | [Falco CHANGELOG v0.44.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)（#3796 / #3797 / #3798）／同 v0.43.0（#3763）／[0.44.0 リリースブログ](https://falco.org/blog/falco-0-44-0/) | `src/versions.js` §CLAIMS `grpc-gvisor-removal-0.44` | 版に関する主張の出典が INVARIANTS に解決する |
+| 10.7 | ✅ **0.44.0 はドライバ API も上げた**（`bump libs to 0.25.1 and drivers to 10.2.0+driver`）。**入れ直しになる** — 0.43 のときに配ったドライバは 0.44 では使えないので、上げる作業が「バイナリを差し替える」で終わらない。**「上げるとコストがかかる」（GAME-DESIGN §3 の2）の実物** | [Falco CHANGELOG v0.44.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)（drivers 10.2.0）／[0.44.0 リリースブログ](https://falco.org/blog/falco-0-44-0/) | `src/versions.js` §CLAIMS `driver-api-bump-0.44` | 版に関する主張の出典が INVARIANTS に解決する |
+| 10.8 | ✅ **0.41.0 でコンテナ対応がプラグインになった**（`new(build,userspace): switch to use container plugin`）。**設定キーが消え、musl ビルドはコンテナのメタデータを失う**。これも「上げると壊れる」の実物で、しかも**壊れ方が `<NA>`（§10.5）と同型** — 鳴らなくなるのではなく、フィールドが埋まらなくなる | [Falco CHANGELOG v0.41.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)／[0.41.0 リリースブログ](https://falco.org/blog/falco-0-41-0/) | `src/versions.js` §CLAIMS `container-plugin-0.41` | 同上 |
+| 10.9 | ✅ **ランタイム指定は CLI から `falco.yaml` に移った**: 0.39.0 で**非推奨**（`chore(userspace/falco): deprecate cri…`）→ 0.40.0 で**削除**。**2段（非推奨 → 削除）が Falco の廃止の型**で、legacy eBPF（§10.2）も gRPC / gVisor（§10.6）も同じ形を踏んでいます。**だから「次に何が消えるか」は非推奨の一覧を見れば分かる** —— 上げる判断に材料がある、ということ | [Falco CHANGELOG v0.39.0 / v0.40.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)／[0.39.0](https://falco.org/blog/falco-0-39-0/)・[0.40.0 リリースブログ](https://falco.org/blog/falco-0-40-0/) | `src/versions.js` §CLAIMS `cri-config-move` | 同上 |
+| 10.10 | ✅ **0.42.0 で enter イベントの扱いが変わった**（`chore(prometheus): deprecate enter event`・`evt.dir` の記述も同版で動いている）。**`evt.dir='>'` を書いたルールが何にもマッチしなくなる** —— 鳴らなくなるのに、ルールは読み込まれていてエラーも出ない。**§2.7 と同じ「計測できない失敗」の族**です | [Falco CHANGELOG v0.42.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)／[0.42.0 リリースブログ](https://falco.org/blog/falco-0-42-0/) | `src/versions.js` §CLAIMS `evt-dir-0.42` | 同上 |
+
+### データ層の主張との対応（`src/versions.js` §CLAIMS の `invariant` に入れる番号）
+
+`versions.js` は主張ごとに `invariant` と `status` を持ちます。**三値の意味はデータ層の定義が正**で、
+`isFixed(id)` = 「`invariant` があり、かつ `status === 'registered'`」＝ **顧客に見える画面が事実として
+書いてよい**、です。
+
+| `status` | 意味 | このレーンがやること |
+|---|---|---|
+| `registered` | register にあり、**register の文言が出典どおり** | 何もしない |
+| `weak` | register にあるが、**register が出典より強いことを言っている** | **弱める。** 未固定として扱う |
+| `verified` | 一次資料はある。**register に無い** | 確認して §10 に足す |
+
+2026-07-31 時点の対応（`cases-freeplay.mjs` が毎回突き合わせ、番号が実在しない場合は赤になります）:
+
+| `CLAIMS.id` | INVARIANTS | このレーンの確認 |
+|---|---|---|
+| `release-dates` | **10.1** | 11段すべてタグごとに実測。一致 |
+| `falco-legacy-ebpf-removal` | **10.2** | CHANGELOG #3796 で確認。**出典の使い分けの注意ごと登録** |
+| `sysdig-legacy-ebpf-retirement` | **10.3** | Docs の Deprecation Notice を引用で確認 |
+| `k8smeta-plugin-min-version` | **10.4** | README の2文を引用で確認。**谷の意味を「取り残される」に訂正** |
+| `grpc-gvisor-removal-0.44` | **10.6** | CHANGELOG #3797（gVisor）＋ #3798（gRPC）で確認 |
+| `driver-api-bump-0.44` | **10.7** | CHANGELOG の drivers `10.2.0+driver` で確認 |
+| `container-plugin-0.41` | **10.8** | CHANGELOG `switch to use container plugin` で確認 |
+| `cri-config-move` | **10.9** | CHANGELOG 0.39 非推奨 → 0.40 削除で確認 |
+| `evt-dir-0.42` | **10.10** | CHANGELOG の enter event 非推奨で確認（**方向のみ**） |
+| `falco-0.37-k8s-client` | 3.7 | 既登録 |
+| `driver-kernel-requirements` | 3.3 | 既登録 |
+| `universal-ebpf-equivalence` | 5.4 | 既登録（トーンは `BOARD.md` §3 で PM 裁定待ち）|
+| `base-syscalls-union` | 2.1 | 既登録 |
+| `rule-maturity-tiers` | 4.1 | 既登録。25 / 31 / 37 を実測で確認 |
+| `modern-ebpf-default-since-0.38` | 3.1 | **`weak` の指摘を受けて §3.1 を弱めました**（版の名指しを外した）|
+
+**まだ登録していないもの**（データ層が出典を持っているが、このレーンが一次資料を読んでいない）:
+
+| `CLAIMS.id` | なぜ未登録か |
+|---|---|
+| `kernel-minimum-not-strict` | 「下限は厳密な線ではない（バックポート可）・厳密なのは BTF と BPF リングバッファ」。**主張として正しそうだが、§3.3 を書き換える形になるので、両方の出典を読んでから触る** |
+| `default-ruleset-shrank-at-0.36` | 0.36 のリリースブログを読んでいない |
+| `plugin-abi-0.35` | 0.35 のリリースブログを読んでいない |
+
+**`npm test` がこの未登録一覧を毎回出します。** 出典を読んだものから §10 に足します。
+**登録していないものを画面に出さないでください**（`isFixed()` が false を返します）。
+
+### 進行の設計に対する含意（**設計はこのレーンの持ち物ではないので、事実だけ**）
+
+1. **「Legacy eBPF が廃止されるから上げろ」は Sysdig を選んだプレイヤーにしか効きません。** Falco 自前運用では、`ebpf` は**上げたら消える**もので、上げない理由の側に立ちます（10.2）。**この2つは逆向きの圧です。** 「上げないと詰む」を Falco 側で作るなら、根拠は legacy eBPF ではなく **新しいルール／プラグインが要求する下限**（10.4）と**新しい攻撃**の方です
+2. **0.37 → 0.40 の間に「壊れる」と「直す手の下限」が両方ある**（10.4 / 10.5）。0.37 で `k8s.*` が `<NA>` になり、現行 `k8smeta` で戻すには 0.40 が要る。**古い版で始めるなら 0.37 未満から始めるのが正しい**（そこなら内蔵クライアントが生きている）
+3. **版の間隔は実在します**（10.1）。0.39.0 → 0.40.0 は約4か月、0.42.0 → 0.43.0 は3か月、0.41.3 → 0.42.0 は3.7か月。**ゲーム内時間の刻みを実際の間隔に合わせられます**（作らなくてよい）

@@ -21,10 +21,27 @@
    touched it fails with a TypeError naming the method — add it to env.mjs.
    That is a harness gap, not a src/ bug.
 
+   ---------------------------------------------------------------- many files
+   Every file matching `scripts/harness/cases*.mjs` is run, not just cases.mjs.
+   A lane that wants its own claims machine-checked creates
+   `cases-<lane>.mjs`, exports a `main()` that prints its report and returns a
+   failure count, and that is the whole registration — nothing to add here, and
+   nobody has to edit somebody else's file (QUEUE.md §検証を書く場所, after four
+   sessions collided on cases.mjs in one afternoon). scripts/harness/lib.mjs has
+   the scaffolding.
+
+   They share ONE module graph, deliberately: env.mjs installs the fake DOM and
+   pins Math.random once, and src/* is evaluated once, so the suites see the same
+   engine rather than N copies of it. The cost is that they also share S and
+   GAME, so a cases file must set up the state it needs instead of assuming
+   nothing has run — which is what the existing one already does (tune() /
+   startScenario() at the top of every case).
+
    usage: node scripts/regress.mjs [--keep-bundle]
    exit code 0 = every causal claim still holds. */
 import { build } from 'esbuild';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -44,18 +61,52 @@ const sceneStub = {
   }
 };
 
+/* cases.mjs first (it owns the drop-model table the others reference), then the
+   per-lane files in a stable order so the report reads the same way every run */
+const suites = readdirSync(join(here, 'harness'))
+  .filter(f => /^cases.*\.mjs$/.test(f))
+  .sort((a, b) => (a === 'cases.mjs' ? -1 : b === 'cases.mjs' ? 1 : a.localeCompare(b)));
+
 const dir = await mkdtemp(join(tmpdir(), 'falco-city-regress-'));
-const out = join(dir, 'cases.mjs');
+const out = join(dir, 'suites.mjs');
 const keep = process.argv.includes('--keep-bundle');
 
 try {
+  /* one generated entry, so all the suites end up in one module graph.
+     env.mjs is imported FIRST here rather than trusting each file to do it:
+     src/* touches the DOM at import time, and whichever suite happens to sort
+     first would otherwise decide whether that works. */
+  const entry = join(dir, 'entry.mjs');
+  /* absolute paths, not file:// URLs — esbuild resolves the former and not
+     the latter. JSON.stringify handles the escaping. */
+  const abs = f => JSON.stringify(join(here, 'harness', f));
+  await writeFile(entry,
+    `import ${abs('env.mjs')};\n`
+    + suites.map((f, i) => `import { main as m${i} } from ${abs(f)};`).join('\n')
+    + `\nconst NAMES = ${JSON.stringify(suites)};`
+    + `\nconst MAINS = [${suites.map((_, i) => `m${i}`).join(', ')}];`
+    + `\nexport function main(){\n`
+    + `  let failed = 0;\n`
+    + `  MAINS.forEach((m, i) => {\n`
+    + `    if(typeof m !== 'function'){\n`
+    + `      console.error('  ' + NAMES[i] + ' が main() を export していません');\n`
+    + `      failed++; return;\n`
+    + `    }\n`
+    + `    failed += m() || 0;\n`
+    + `  });\n`
+    + `  return failed;\n`
+    + `}\n`);
+
   await build({
-    entryPoints: [join(here, 'harness', 'cases.mjs')],
+    entryPoints: [entry],
     outfile: out,
     bundle: true, format: 'esm', platform: 'node', target: 'node18',
     plugins: [sceneStub],
     logLevel: 'warning'
   });
+
+  if(suites.length > 1)
+    console.log(`\nハーネス ${suites.length} 本: ${suites.join(' · ')}`);
 
   const { main } = await import(pathToFileURL(out).href);
   const failed = main();
