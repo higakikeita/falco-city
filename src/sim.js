@@ -264,8 +264,15 @@ function step(dt){
   pg.attributes.alpha.needsUpdate = true;
   pg.attributes.size.needsUpdate = true;
 
-  /* rule / policy stream — always running, only the source differs */
-  const showPolicy = true;
+  /* Rule / policy stream. sim.js owns polPoints, so sim.js decides whether it is
+     drawn — campaign.js used to set this too, and because step() runs every frame
+     the campaign's answer was overwritten immediately (BOARD #12): rule artifacts
+     rained onto an empty plot where 09 had never been built.
+
+     In a campaign the stream only exists once something is there to emit it: 09
+     ルール配布 pulling OCI artifacts, or the Sysdig backend pushing policy. In
+     explore mode everything stands, so it always runs. */
+  const showPolicy = !GAME.on || GAME.built.has('falcoctl') || GAME.built.has('sysdig');
   polPoints.visible = showPolicy;
   if(showPolicy){
     for(let i=0;i<PN;i++){
