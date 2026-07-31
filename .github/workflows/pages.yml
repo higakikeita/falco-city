@@ -27,8 +27,10 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Every module imports what it uses
+        run: node scripts/check-imports.mjs
       - run: npm run build
-      - name: Sanity-check the bundle
+      - name: Sanity-check the generated single file
         run: node scripts/check-build.mjs
       - uses: actions/configure-pages@v5
         if: github.ref == 'refs/heads/main'

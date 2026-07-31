@@ -5,38 +5,34 @@
 `syscall → alert` のパイプラインを、歩ける 3D の「都市」として表現したインタラクティブモデル。
 登壇・ウェビナー・顧客説明で「Falco と Sysdig が実際に何をしているか」を1画面で見せるためのもの。
 
-## 2種類の index.html があるので注意
+## ファイル構成
 
-| ファイル | 用途 |
+`src/` が正。`docs/` は生成物で、**リポジトリには入っていない**（CI が作って Pages に配る）。
+
+| 場所 | 中身 |
 |---|---|
-| `index.html`（ルート） | **編集するのはこっち。** Three.js を CDN から ES モジュールで読む開発版。HTTP サーバが必要 |
-| `docs/index.html` | **公開・配布されるのはこっち。** ビルド生成物。単一ファイル・約0.7MB・Three.js 同梱。ダブルクリックで開く（`file://` で動く） |
+| `src/index.html` | HTML シェル（マークアップ＋CSS）。dev では importmap で CDN の three を解決する |
+| `src/*.js` | ES モジュール。担当の境界（後述の「開発の分担」） |
+| `build.mjs` | esbuild で `src/main.js` を1つの通常スクリプトにまとめ、シェルに埋め込んで `docs/index.html` を作る |
+| `scripts/check-imports.mjs` | 各モジュールが使っている共有シンボルを import し忘れていないか検査 |
+| `scripts/check-build.mjs` | 生成物の健全性検査（モジュール化されていない・three が埋まっている・タグが閉じている等） |
+| `docs/index.html` | **配布物**。単一ファイル・約0.6MB・three 同梱。ダブルクリックで開く（`file://` で動く） |
 
-ルートの `index.html` が正。直したら必ず `npm run build` して `docs/` を更新する。
-`docs/index.html` を直接編集しても次のビルドで上書きされる。
+なぜ生成物を通常スクリプトにするか: `file://` は ES モジュールを拒否するので、
+これをやらないと「ファイルを渡してダブルクリック」が成立しない。Slack にアップロードした
+HTML のリンクを直接開かせるのも不可（署名付き URL に期限がある）。渡すときは Pages の URL か、
+ダウンロードしてから開くよう案内する。
 
-GitHub Pages は `main` ブランチの `/docs` から配信する設定。
-
-## ビルド
-
-```bash
-npm install && npm run build
-```
-
-`build.mjs` が `index.html` から importmap を外し、バンドル済み Three.js を埋め込み、
-アプリのスクリプトを `type="module"` から通常スクリプトに落とす（`file://` はモジュールを拒否するため）。
-
-これがないと「ファイルを渡してダブルクリック」が成立しない。Slack にアップロードした HTML の
-リンクを直接開かせるのも不可（署名付き URL に期限があり、HTML をページとして配信し続ける保証がない）。
-渡すときは Pages の URL か、ダウンロードしてから開くよう案内する。
-
-## 開発版の起動
+## 開発
 
 ```bash
-python3 -m http.server 8722
+npm install
+npm run dev      # http://localhost:8722 で src/ をそのまま配信
+npm run check    # import 検査 → ビルド → 生成物検査
 ```
 
-→ http://localhost:8722
+`docs/` はコミットしない（`.gitignore` 済み）。公開物は `main` への push で
+GitHub Actions が作ってデプロイする。
 
 ## 都市の地区 = パイプラインの段
 
@@ -178,11 +174,12 @@ HUD の `drain utilisation` と判定バンドが、いまどちらの状態か�
 — カメラのフィット、ミニマップの枠と色、ツアーのボタン、キーボードショートカット、
 パーティクルの通過座標、Shield オーバーレイの範囲。**他の数字を触る必要はない。**
 
+`src/districts.data.js` に宣言を1つ:
+
 ```js
 {
   id:'falcoctl', n:'09', tag:'RULE DISTRIBUTION',
   jp:'ルール配布', en:'falcoctl — oci artifacts',
-  build:BUILD_falcoctl,                 // ビルダー関数
   w:20, d:16, top:14,                   // 必要な広さ（x × z）と高さ
   lane:'north', after:'rules', dx:-4,   // どこに置くか
   color:0xC9AEDA,                       // ミニマップの色もここから引かれる
@@ -200,6 +197,9 @@ HUD の `drain utilisation` と判定バンドが、いまどちらの状態か�
 | `y` | 高さ。上空に浮かせるデッキ用（Sysdig Secure が `y:31`） |
 | `w` / `d` / `top` | x 幅 / z 奥行き / 高さ。当たり判定とカメラの導出に使われる |
 | `cam` | 省略可。省略すると `w` / `d` / `top` から妥当な3/4ビューが導出される |
+
+`src/districts.build.js` に `BUILD_falcoctl` を書き、同ファイル末尾の `BUILDERS` に登録する
+（登録を忘れると `src/city.js` が地区名つきで例外を投げるので、黙って壊れることはない）。
 
 ビルダーは `(group, d, cx, cz)` を受け取る。`d.x0` / `d.x1` / `d.z0` / `d.z1` は
 レイアウト後の実座標なので、**中身は必ず相対で書く**（絶対座標を書くと地区を挿入した
