@@ -21,7 +21,11 @@
 export default {
   id:'a-different-source',
   title:'syscall を増やしても見えない',
-  order: 60,
+  /* second of the three "not on the flow" districts. Harder than 08 because the
+     move space is 15 wide instead of 4, and easier than 09 because the invited
+     move (base_syscalls -> all) makes the score visibly WORSE, so the wrong
+     answer teaches instead of just failing. */
+  order: 30,
   blurb:'syscall 経路は全段建っていて、ドロップは <b>0%</b>。ルールも falcoctl で追従している。'+
         'それでも <b>クラウド側の侵害だけ</b>が1段も鳴らない。',
 

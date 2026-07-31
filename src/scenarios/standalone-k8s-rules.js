@@ -7,7 +7,11 @@
 export default {
   id:'standalone-k8s-rules',
   title:'鳴らない k8s ルール',
-  order:30,
+  /* wedged between the first two drop scenarios on purpose. inherited-all-syscalls
+     (50) and slow-output (70) invite the SAME wrong move — raise buf_size_preset —
+     and back to back they read as the same scenario twice. This one breaks the run
+     with the only cause that is neither a component nor a lever: WHERE you are. */
+  order:60,
   blurb:'ルールは最新まで追従している。それでも k8s 系のルールが1本も鳴らない。'+
         'この街は <b>1台のホスト</b>。',
 
