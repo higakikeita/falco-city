@@ -16,6 +16,7 @@ import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack,
          goalStatus, onCampaignChange } from './campaign.js';
 import { initAudio, play, tickAudio, campaignAudio,
          setMuted, toggleMuted, setVolume, audioState } from './audio.js';
+import * as save from './save.js';
 import { SCENARIO_ERRORS } from './scenarios/index.js';
 import { model } from './state.js';
 
@@ -66,6 +67,7 @@ window.__city = {
   SCENARIO_ERRORS,
   model, onTune:onTuneChange, setDeploy, dbg:deployRefs,
   initAudio, play, setMuted, toggleMuted, setVolume, audioState,
+  save,
   renderOnce(){ controls.update(); updateTags(); drawMinimap(); renderer.render(scene,camera); },
   homeCam,
   camDist(){ return camera.position.distanceTo(controls.target); },
@@ -78,6 +80,24 @@ window.__city = {
    needs its own hook into the rules. Muted by default — nothing is created
    until a real click reaches initAudio(). */
 onCampaignChange(ev => campaignAudio(ev, GAME));
+
+/* progress: save.js decides the shape, this decides when. Nothing about the
+   run's internals is stored — only which scenario was cleared and how well. */
+onCampaignChange(ev => {
+  if(ev.type === 'scenario') save.beginScenario(ev.id);
+  else if(ev.type === 'run') save.noteAttempt(GAME.scenario);
+  else if(ev.type === 'reveal' && ev.done){
+    const sc = activeScenario(), st = goalStatus();
+    if(!sc || !st || !st.cleared) return;
+    const det = GAME.results.filter(r => !r.response);
+    save.recordClear(sc.id, {
+      detect: det.filter(r => r.caught).length,
+      of:     det.length,
+      asks:   GAME.asks,
+      dropPct: model().dropP * 100
+    });
+  }
+});
 
 /* init */
 setMode('oss');
