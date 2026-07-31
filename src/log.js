@@ -33,7 +33,7 @@ import { PRIO, spawn, N } from './sim.js';
      - `Drop and execute new binary in container` is tagged `maturity_stable`,
        so it IS in the release package and falcoctl has nothing to do with it.
        INVARIANTS 4.3 records the same error against campaign.js's CHAIN step.
-     - meanwhile five genuinely non-stable rules had no gate at all and printed
+     - meanwhile genuinely non-stable rules had no gate at all and printed
        freely. Measured in `inherited-all-syscalls` with 09 unbuilt: `Non sudo
        setuid` (incubating) and `Detect crypto miners using the Stratum
        protocol` (sandbox) reached this console while the panel beside it was
@@ -41,10 +41,30 @@ import { PRIO, spawn, N } from './sim.js';
 
    The fact, once: the rules ship in three files and file maps 1:1 to maturity —
    `falco_rules.yaml` (stable, 25) / `falco-incubating_rules.yaml` (31) /
-   `falco-sandbox_rules.yaml` (37) — and only the stable set is loaded by
-   default. incubating and sandbox are separate OCI artifacts, which is exactly
-   what 09 ルール配布 (falcoctl) is. So the gate is not a per-rule district any
-   more; it is derived from the maturity tag, in one line, below.
+   `falco-sandbox_rules.yaml` (37), no rule carrying two tags. That split is now
+   MEASURED against falcosecurity/rules rather than recalled, and only the stable
+   set is loaded by default. incubating and sandbox are separate OCI artifacts,
+   which is exactly what 09 ルール配布 (falcoctl) is. So the gate is not a
+   per-rule district any more; it is derived from the maturity tag, in one line,
+   below.
+
+   ---- and one of these tags was this lane guessing --------------------------
+   Two of the tags above were handed over as facts. The rest were this file's
+   own attribution, said out loud as unsourced when it shipped, and the
+   inspection lane then went and measured them:
+
+     Clear Log Activities              stable,      WARNING   <- WAS WRONG HERE
+     Change thread namespace           incubating,  NOTICE       correct
+     Packet socket created in container stable,     NOTICE       never tagged
+
+   `Clear Log Activities` was gated behind falcoctl and is in the release
+   package, so the console was hiding a rule the player already had — the exact
+   failure this section was written to fix, in the opposite direction. It also
+   had PRIO index 1 (Error) against a measured WARNING.
+
+   The reason it was catchable: the guess was reported AS a guess. An unsourced
+   claim written down as unsourced gets checked; the same claim written down as
+   a fact teaches wrongly forever. That is the rule, not the exception.
 
    campaign.js states the same fact on its CHAIN steps and has to state it twice
    for now, because log.js cannot import campaign.js — campaign.js →
@@ -69,9 +89,13 @@ const RULES_LOG = [
    null, 'sandbox'],
   ['Redirect STDOUT/STDIN to Network Connection in Container', 1, 'proc=bash fd=3'],
   ['Sudo Potential Privilege Escalation', 1, 'proc=sudoedit user=app'],
+  /* MEASURED stable + NOTICE — it was a candidate for the gate and is not one */
   ['Packet socket created in container', 3, 'proc=tcpdump'],
-  ['Clear Log Activities', 1, 'file=/var/log/auth.log proc=shred', null, 'incubating'],
+  /* MEASURED stable + WARNING (see §maturity). Two corrections in one row: the
+     tag was this lane's own guess and it was wrong, and PRIO index 1 is Error. */
+  ['Clear Log Activities', 2, 'file=/var/log/auth.log proc=shred'],
   ['Search Private Keys or Passwords', 2, 'proc=grep args=-r BEGIN RSA'],
+  /* MEASURED incubating + NOTICE */
   ['Change thread namespace', 3, 'proc=nsenter', null, 'incubating'],
   ['Non sudo setuid', 2, 'proc=node uid=0', null, 'incubating'],
   /* 4th element = plugin event source (not syscalls) → no syscall-side k8s.pod
