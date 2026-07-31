@@ -25,7 +25,12 @@
 export default {
   id:'eyes-but-no-hands',
   title:'見えているのに止まらない',
-  order: 50,
+  /* the first diagnosis after the tutorial, because it is the smallest one there
+     is: measured, this seat offers only 4 single moves and one of them clears it.
+     The symptom is also the loudest — 6/6 detected and the breach still running —
+     so it teaches "the pipeline has parts that are not on the flow" with the
+     least room to get lost. */
+  order: 20,
   blurb:'このクラスタの検知は<b>完成している</b> — 6段の攻撃を6段とも取れる。'+
         'アラートは SOC に届いており、いま侵害は<b>進行中</b>。'+
         'それでも侵害されたコンテナは動き続けている。',

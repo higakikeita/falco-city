@@ -62,7 +62,10 @@
 export default {
   id:'silent-blind-spot',
   title:'測れない盲点',
-  order:80,
+  /* last, and it has to be last: every other scenario hands the player a number
+     to chase. This one hands them a green dashboard. Measured: of the 13 single
+     moves available in this seat, 11 are inert and exactly one clears it. */
+  order:90,
   blurb:'ドロップ <b>0%</b>、util も健全、地区は全部建っている。'+
         'それでも検知が1段足りない。前任者が <code>base_syscalls</code> を手書きしている。',
 
