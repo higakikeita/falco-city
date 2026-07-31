@@ -31,6 +31,12 @@
  *
  *   env.type   string    one of ENVIRONMENTS below.
  *   env.nodes  number    node count. Defaults to the environment's own.
+ *   env.cpus   number    vCPUs on the node you are standing on. null = the
+ *                        default node. Node COUNT and node SIZE are different
+ *                        axes and neither can stand in for the other: buffers
+ *                        are ceil(nCPU / cpus_for_each_syscall_buffer) and nCPU
+ *                        belongs to one node, while alert volume scales with the
+ *                        number of nodes (INVARIANTS 3.6).
  *
  *   start                the state you inherit. Everything here is something a
  *                        previous person could have left behind, which is what
@@ -38,6 +44,16 @@
  *                        case where they left nothing.
  *   start.built  string[]  districts already standing. Dependencies must be
  *                          satisfied within the set (checked by campaign.js).
+ *   start.unmet  object    BUILT IS NOT WORKING. districtId -> the ids of the
+ *                          conditions that district declares (campaign.js
+ *                          §REQUIREMENTS) and this situation does NOT satisfy.
+ *                          The district stands on the build list and is still
+ *                          not doing its job, which is what "we installed it and
+ *                          it never fires" actually looks like. The district has
+ *                          to be in start.built: this is an inherited state, not
+ *                          a curse on anything you build yourself. The player
+ *                          fixes them one at a time, and a condition on somebody
+ *                          else's district costs an ask like any other.
  *   start.tune   object    falco.yaml levers already set. Keys are TUNE_DEFAULTS,
  *                          which means base_syscalls is expressible as the real
  *                          thing and not only as a preset name:
@@ -46,9 +62,15 @@
  *                            syscallRepair  base_syscalls.repair
  *                          A positive custom_set cannot take away the syscalls
  *                          the enabled rules require, so it cannot create a
- *                          blind spot. A negative entry or repair:false can.
- *                          Phase 0 carries both without scoring them; Phase 1
- *                          scores them, and no scenario file has to change.
+ *                          blind spot (INVARIANTS 2.1 / 2.3). A negative entry
+ *                          can, and campaign.js scores it: a step goes blind when
+ *                          every syscall its rule can match on has a `!` entry,
+ *                          and only while base_syscalls is hand-written
+ *                          (syscallSet: 'custom'). `syscallRepair` is carried and
+ *                          still not scored — deliberately, because repair
+ *                          restores state-engine consistency and NOT coverage
+ *                          (INVARIANTS 2.5), so turning it back on must not be
+ *                          allowed to look like a fix for a blind spot.
  *   start.load   number    NODE LOAD as inherited.
  *   start.driver string    modern_ebpf | ebpf | kmod. Must be one the
  *                          environment allows. null = the environment's first.
@@ -64,10 +86,13 @@
  *
  *   attack.auto      boolean   defence always faces an automatic attack.
  *   attack.response  boolean   include the containment step.
- *   attack.waves     array     [{ jp, steps:[chain step id] }]. Phase 0 runs
- *                              the flattened list in one go; the boundaries are
- *                              declared now so Day 2 can walk them without
- *                              touching any scenario file.
+ *   attack.waves     array     [{ jp, steps:[chain step id] }]. The engine walks
+ *                              these one at a time and stops between them, so
+ *                              wave 1 shows you the holes and wave 2 arrives
+ *                              against whatever you did about them. Detections
+ *                              accumulate across the waves of one pass, so
+ *                              goal.detect still means "of everything that came".
+ *                              The containment step joins the LAST wave.
  *
  *   insight.id     string   stable key for the one misdiagnosis this scenario
  *                           exists to make the player walk into. One per
@@ -75,17 +100,34 @@
  *   insight.wrong  string   the conclusion the situation invites.
  *   insight.truth  string   what is actually happening.
  *
- *   goal.detect      number|null  detections required (of the non-response steps)
+ *   goal.detect      number|null  detections required, summed over every wave
  *   goal.contain     boolean      containment step must land
  *   goal.maxAsks     number|null  how many times you may lean on another team
  *   goal.maxDropPct  number|null  ceiling on ring-buffer loss, in percent
+ *   goal.maxBuriedPct number|null ceiling on the share of real alerts that the
+ *                              SOC queue never gets to, in percent. The noise
+ *                              side of the same arithmetic as maxDropPct: this
+ *                              is how a scenario says "you may not win by making
+ *                              everything ring" (state.js §noise).
+ *   goal.minPassRatio number|null floor on the share of the syscall stream that
+ *                              reaches the rules engine at all, in percent. Every
+ *                              drop problem can be made to disappear by narrowing
+ *                              base_syscalls, and sometimes that is the answer —
+ *                              this is how a scenario refuses to accept it when
+ *                              the answer was supposed to be somewhere else.
+ *   goal.maxRuns     number|null  how many times you may run the attack. 1 = you
+ *                              have to have diagnosed it, because brute force is
+ *                              free otherwise and asks are not the only cost.
+ *   goal.lockLoad    boolean      NODE LOAD is what the workload happens to be
+ *                              doing, not a treatment. With this set, turning it
+ *                              down below what you were handed does not clear.
  *
  * Referential checks (step ids, role ids, build dependencies) live in
  * campaign.js, which owns those tables. Keeping them out of here avoids an
  * import cycle and keeps this file honest about what it knows.
  */
 import { TUNE_DEFAULTS } from '../state.js';
-import { DEPLOYMENTS, nodeCount } from '../districts.data.js';
+import { DEPLOYMENTS, nodeCount, NODE_CPUS } from '../districts.data.js';
 
 /* ---------------------------------------------------------------- environments
    The environment axis is declared once, in districts.data.js §DEPLOYMENTS,
@@ -94,24 +136,19 @@ import { DEPLOYMENTS, nodeCount } from '../districts.data.js';
    and nothing here. `env` is the environment, `id` is the wire value S.deploy
    carries, and the two are one-to-one.
 
-   The one thing the scenario layer adds is which drivers are available, and only
-   one rule survives the sources: where there is no kernel path there is no driver
-   to pick.
-
-   There is deliberately NO per-environment kmod restriction. "managed k8s cannot
-   load a kernel module" is disproven — the only documented case is GKE's
-   Container-Optimized OS, which is a property of the NODE OS and not of who
-   manages the cluster (README §環境の因果 / Falco Environments). That axis needs
-   an attribute the environment table does not carry yet; until it does, stating
-   it here would be inventing causality. */
-const ENV_DRIVERS = {};      // per-environment overrides; none are justified yet
-
+   Which drivers are legal is no longer decided here either. The environment
+   table now carries the node OS axis and derives `drivers` from it, so this file
+   reads the answer instead of restating it — the one documented kmod restriction
+   is GKE's Container-Optimized OS, which is a property of the NODE OS and not of
+   who manages the cluster (INVARIANTS 3.1 / 3.2). Deriving it there is what makes
+   `managed k8s · GKE` legal to declare and `managed k8s · EKS` unaffected. */
 const ENVIRONMENTS = DEPLOYMENTS.map(d => ({
   id:d.env,
   jp:d.jp,
   deploy:d.id,                                     /* the topology it is */
   nodes:nodeCount(d),
-  drivers:d.kernelPath ? (ENV_DRIVERS[d.env] || ['modern_ebpf','ebpf','kmod']) : [],
+  drivers:(d.drivers || []).slice(),
+  nodeOs:d.nodeOs, kmodOk:!!d.kmodOk,
   cluster:!!d.cluster, apiServer:!!d.apiServer,
   kernelPath:!!d.kernelPath, k8sMeta:!!d.k8sMeta
 }));
@@ -126,12 +163,13 @@ const TUNE_KEYS = Object.keys(TUNE_DEFAULTS);
 const SCENARIO_DEFAULTS = {
   order:100,
   blurb:'',
-  env:    { type:'self-managed-k8s', nodes:null },
-  start:  { built:[], tune:{}, load:1.0, driver:null, stack:'oss' },
+  env:    { type:'self-managed-k8s', nodes:null, cpus:null },
+  start:  { built:[], tune:{}, unmet:{}, load:1.0, driver:null, stack:'oss' },
   player: { side:'defense', role:null, lockRole:false },
   attack: { auto:true, response:true, waves:[] },
   insight:{ id:null, wrong:'', truth:'' },
-  goal:   { detect:null, contain:false, maxAsks:null, maxDropPct:null }
+  goal:   { detect:null, contain:false, maxAsks:null, maxDropPct:null,
+            maxBuriedPct:null, minPassRatio:null, maxRuns:null, lockLoad:false }
 };
 
 /* ---------------------------------------------------------------- purity
@@ -165,6 +203,13 @@ function plainDataErrors(v, path, out){
 /* ---------------------------------------------------------------- validation */
 const KNOWN_TOP = ['id','title','order','blurb','env','start','player','attack','insight','goal'];
 
+/* The shape check runs on the RAW file, before normalize() fills the defaults in,
+   so "not written down" and "written down as null" both have to be accepted for
+   anything that has a default. Every field added after the content lane opened
+   must go through here, or adding one invalidates every scenario already written
+   — which is what makes the schema additive in practice and not only on paper. */
+const absent = v => v === undefined || v === null;
+
 function validateShape(s){
   const e = [];
   const bad = (m) => e.push(m);
@@ -192,8 +237,10 @@ function validateShape(s){
     bad(`env.type "${env.type}" is not one of ${ENVIRONMENTS.map(x=>x.id).join(' / ')}`);
   if(env.nodes !== null && (typeof env.nodes !== 'number' || env.nodes < 0))
     bad('env.nodes must be a non-negative number or null');
+  if(!absent(env.cpus) && (typeof env.cpus !== 'number' || env.cpus < 1))
+    bad('env.cpus must be a positive number of vCPUs, or null for the default node');
   for(const k of Object.keys(env))
-    if(!['type','nodes'].includes(k)) bad(`unknown field: env.${k}`);
+    if(!['type','nodes','cpus'].includes(k)) bad(`unknown field: env.${k}`);
 
   const st = s.start;
   if(!Array.isArray(st.built) || st.built.some(x => typeof x !== 'string'))
@@ -209,12 +256,23 @@ function validateShape(s){
     if(st.tune.syscallRepair !== undefined && typeof st.tune.syscallRepair !== 'boolean')
       bad('start.tune.syscallRepair must be a boolean');
   }
+  /* built-is-not-working, as data: which declared condition is unsatisfied. The
+     condition ids belong to campaign.js §REQUIREMENTS, so only the shape is
+     checked here (see the note at the top of this file about import cycles). */
+  if(st.unmet !== undefined){
+    if(typeof st.unmet !== 'object' || st.unmet === null || Array.isArray(st.unmet))
+      bad('start.unmet must be an object of districtId -> condition ids');
+    else for(const [k, v] of Object.entries(st.unmet)){
+      if(!Array.isArray(v) || !v.length || v.some(x => typeof x !== 'string'))
+        bad(`start.unmet.${k} must be a non-empty array of condition ids`);
+    }
+  }
   if(typeof st.load !== 'number' || st.load <= 0) bad('start.load must be a positive number');
   if(st.driver !== null && !DRIVER_IDS.includes(st.driver))
     bad(`start.driver must be null or one of ${DRIVER_IDS.join(' / ')}`);
   if(!STACK_IDS.includes(st.stack)) bad(`start.stack must be one of ${STACK_IDS.join(' / ')}`);
   for(const k of Object.keys(st))
-    if(!['built','tune','load','driver','stack'].includes(k))
+    if(!['built','tune','unmet','load','driver','stack'].includes(k))
       bad(`unknown field: start.${k}`);
 
   /* the environment decides what is even possible to have chosen */
@@ -259,10 +317,23 @@ function validateShape(s){
   if(typeof g.contain !== 'boolean') bad('goal.contain must be a boolean');
   if(!num(g.maxAsks)) bad('goal.maxAsks must be a number or null');
   if(!num(g.maxDropPct)) bad('goal.maxDropPct must be a number or null');
-  if(g.detect === null && !g.contain && g.maxAsks === null && g.maxDropPct === null)
+  if(!absent(g.maxBuriedPct) && !num(g.maxBuriedPct))
+    bad('goal.maxBuriedPct must be a number or null');
+  if(!absent(g.minPassRatio) && !num(g.minPassRatio))
+    bad('goal.minPassRatio must be a number or null');
+  if(!absent(g.maxRuns) && (typeof g.maxRuns !== 'number' || g.maxRuns < 1))
+    bad('goal.maxRuns must be at least 1, or null');
+  if(g.lockLoad !== undefined && typeof g.lockLoad !== 'boolean')
+    bad('goal.lockLoad must be a boolean');
+  const GOAL_KEYS = ['detect','contain','maxAsks','maxDropPct','maxBuriedPct',
+                     'minPassRatio','maxRuns','lockLoad'];
+  /* lockLoad and maxRuns only forbid things, so neither is a condition on its
+     own — a scenario still has to say what winning looks like */
+  if(GOAL_KEYS.filter(k => !['lockLoad','maxRuns'].includes(k))
+              .every(k => absent(g[k]) || g[k] === false))
     bad('goal declares no clear condition');
   for(const k of Object.keys(g))
-    if(!['detect','contain','maxAsks','maxDropPct'].includes(k)) bad(`unknown field: goal.${k}`);
+    if(!GOAL_KEYS.includes(k)) bad(`unknown field: goal.${k}`);
 
   return e;
 }
@@ -275,7 +346,8 @@ function normalize(s){
     order: s.order ?? d.order,
     blurb: s.blurb ?? d.blurb,
     env:    {...d.env,    ...(s.env    || {})},
-    start:  {...d.start,  ...(s.start  || {}), tune:{...(s.start?.tune || {})}},
+    start:  {...d.start,  ...(s.start  || {}), tune:{...(s.start?.tune || {})},
+             unmet:{...(s.start?.unmet || {})}},
     player: {...d.player, ...(s.player || {})},
     attack: {...d.attack, ...(s.attack || {})},
     insight:{...d.insight,...(s.insight|| {})},
@@ -283,11 +355,13 @@ function normalize(s){
   };
 }
 
-/* the environment a scenario runs in, with the scenario's overrides applied */
+/* the environment a scenario runs in, with the scenario's overrides applied.
+   `cpus` is the size of one node; the table has no opinion about it yet, so the
+   fallback is the model's default node (state.js §NODE_CPUS). */
 function envOf(s){
   const e = envById(s.env.type);
   if(!e) return null;
-  return {...e, nodes: s.env.nodes ?? e.nodes};
+  return {...e, nodes: s.env.nodes ?? e.nodes, cpus: s.env.cpus ?? NODE_CPUS};
 }
 
 /* the topology is the environment, and the driver defaults to the best one the
@@ -295,8 +369,10 @@ function envOf(s){
 const deployOf = s => envById(s.env.type).deploy;
 const driverOf = s => s.start.driver ?? envById(s.env.type).drivers[0] ?? null;
 
-/* the flattened attack, in order. Day 2 walks attack.waves instead; until then
-   a wave boundary is information the engine carries but does not act on. */
+/* the waves, in order — this is what the engine walks */
+const wavesOf = s => s.attack.waves;
+/* the whole attack flattened, in order. Used for the referential checks and for
+   the pre-run projection, which asks what would happen if all of it arrived now. */
 const stepsOf = s => s.attack.waves.flatMap(w => w.steps);
 
 export {
@@ -305,6 +381,7 @@ export {
   envOf,
   deployOf,
   driverOf,
+  wavesOf,
   stepsOf,
   normalize,
   validateShape,
