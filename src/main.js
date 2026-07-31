@@ -13,7 +13,7 @@ import { setMode, setDeploy, onTuneChange } from './controls.js';
 import { tickReveal, applyGameVisibility, setUiMode, evaluate, build, runAttack,
          setRole, setSide, blameOf, OWNER, roleReport,
          SCENARIOS, startScenario, activeScenario, activeEnv, activeChain,
-         goalStatus, onCampaignChange } from './campaign.js';
+         goalStatus, passResults, onCampaignChange } from './campaign.js';
 import { initAudio, play, tickAudio, campaignAudio,
          setMuted, toggleMuted, setVolume, audioState } from './audio.js';
 import * as save from './save.js';
@@ -82,14 +82,23 @@ window.__city = {
 onCampaignChange(ev => campaignAudio(ev, GAME));
 
 /* progress: save.js decides the shape, this decides when. Nothing about the
-   run's internals is stored — only which scenario was cleared and how well. */
+   run's internals is stored — only which scenario was cleared and how well.
+   Both hooks are per-PASS, not per-wave, which is the distinction that matters
+   now that an attack arrives in several waves:
+
+     attack  fires once when a pass starts, so one pass is one attempt
+     over    fires once when the last wave has banked, and carries the verdict
+
+   and the score has to come from passResults(), which is cumulative across the
+   waves of the pass. GAME.results is only ever the wave on screen — reading it
+   here recorded 2-wave greenfield as 3/3 instead of 6/6. */
 onCampaignChange(ev => {
   if(ev.type === 'scenario') save.beginScenario(ev.id);
-  else if(ev.type === 'run') save.noteAttempt(GAME.scenario);
-  else if(ev.type === 'reveal' && ev.done){
-    const sc = activeScenario(), st = goalStatus();
-    if(!sc || !st || !st.cleared) return;
-    const det = GAME.results.filter(r => !r.response);
+  else if(ev.type === 'attack') save.noteAttempt(GAME.scenario);
+  else if(ev.type === 'over' && ev.cleared){
+    const sc = activeScenario();
+    if(!sc) return;
+    const det = passResults().filter(r => !r.response);
     save.recordClear(sc.id, {
       detect: det.filter(r => r.caught).length,
       of:     det.length,
