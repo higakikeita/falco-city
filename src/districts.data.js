@@ -3,34 +3,47 @@ import { C } from './palette.js';
 
 
 /* ============================================================
-   1a. deployment topologies — the west end is rebuilt per deployment
+   1a. the environment — four orthogonal axes
    ------------------------------------------------------------
-   Node count and the shape of the west end used to be baked into the
-   workloads builder (three pads, two hand-written variants, a caption that
-   said "3 NODES"). Anything about the environment that a future scenario
-   might want to vary is declared here instead:
+   This used to be one axis with four values (host / self-managed k8s /
+   managed k8s / kernel-less), resting on the claim that "managed Kubernetes
+   cannot load a kernel module". That claim does not survive the primary
+   sources. The only environment Falco documents as unable to load its
+   kernel module is GKE's Container-Optimized OS, and the constraint belongs
+   to the node image, not to who runs the control plane — EKS and AKS do not
+   appear on that page at all. Likewise "a systemd host only has
+   container.id and never fires a k8saudit rule" was wrong twice over:
+   container metadata comes off the container runtime socket, which is
+   orthogonal to how Falco was installed, and k8saudit runs fine on a host.
 
-     shape    'nodes'   node pads carrying pods — a cluster
-              'machine' one slab carrying named processes — a single host
-              'none'    no west end at all (kernel-less: nothing to draw)
-     nodes    how many pads. The district's own depth is derived from the
-              largest count declared here, so the layout engine re-flows the
-              rest of the city on its own — no coordinate needs touching
-     caption  ground text, given the node count
+   So the environment is four axes that switch independently, and each axis
+   value carries the consequence it causes and nothing else:
 
-   The environment axis has four values, and self-managed and managed
-   Kubernetes are separate entries even though Phase 0 draws them the same —
-   what separates them is the driver choice and the audit path, which is
-   causal, not geometric, and belongs to another session.
+     orchestrator    changes how the Kubernetes audit log is COLLECTED.
+                     Self-managed can point a static audit webhook at Falco.
+                     Managed cannot, so a provider plugin PULLS the log
+                     (EKS = CloudWatch Logs, AKS = Event Hub, GKE = Pub/Sub)
+     node OS         COS cannot insert a kernel module, so Modern eBPF is
+                     mandatory. This is the ONLY documented case of kmod
+                     being impossible, which is why it hangs off the node
+                     image and not off the orchestrator
+     runtime socket  whether container.* and — in Kubernetes — k8s.pod.* /
+                     k8s.ns.name get attached at all. Unreachable leaves
+                     container.id and container.type, because those two come
+                     from the cgroup inside the kernel and need no socket
+     k8smeta plugin  whether the API-server-derived fields exist. Falco 0.37
+                     moved them out of the engine into the k8smeta plugin +
+                     k8s-metacollector, and the old k8s.deployment.name
+                     family now evaluates to <NA> in rules
 
-     env      the environment this topology represents
-     id       the wire value S.deploy carries. The three ids that already have
-              DEPLOY buttons keep their names, because those buttons and every
-              `S.deploy === '...'` comparison live in files this session does
-              not own. `managed` arrives without a button on purpose.
+   Sources, in order: falco.org/docs/setup/enviroments (COS / kmod),
+   falco.yaml's own comments (the container plugin reads the runtime socket),
+   plugins/k8saudit-eks/README.md (single instance), the Falco 0.37 release
+   notes and k8smeta plugin docs.
 
-   Adding a topology is a declaration in this array. The geometry side needs
-   nothing else.
+   Adding a value is a declaration in one of these arrays. controls.js
+   renders a button for it and log.js reads its consequences; neither file
+   contains an environment id, and that is the invariant to keep.
    ============================================================ */
 
 /* Pads sit on a fixed pitch, centred on the district. The constants are the
@@ -40,6 +53,173 @@ const NODE_PITCH = 11.875;   // pad depth 10.4 + gap
 const NODE_MARGIN = 2.375;   // clearance at both ends of the district
 const NODE_PAD_W = 24, NODE_PAD_D = 10.4;
 const POD_PITCH = 4.8;
+
+/* ---------- axis 1: orchestrator — how the audit log is COLLECTED ----------
+   `audit` is the whole causal payload. `null` means there is no Kubernetes
+   audit log to collect, so no k8saudit rule can fire — not because of how
+   Falco was installed, but because the input does not exist.
+
+     pull        the plugin fetches from a provider log sink instead of
+                 receiving a webhook push
+     controller  what actually gets deployed for the audit path
+     replicas    how many of it. 1 where a source says so, and only there
+     single      duplicate alerts if you run more than one. EKS only
+     driver /    whether that instance carries a driver and collectors.
+     collectors  false where the official Helm values say so, null where no
+                 source states it — the model does not guess                */
+const ORCH = [
+  {
+    id:'none', lbl:'なし', jp:'オーケストレータなし', wire:'host',
+    cluster:false, apiServer:false, managed:false, audit:null,
+    why:'Kubernetes が無いので、k8saudit の入力そのものが存在しない。'+
+        'syscall 側の検知はこれとは無関係に成立する',
+    caption:() => 'SINGLE HOST · falco.service (systemd)'
+  },
+  {
+    id:'k8s', lbl:'self-managed', jp:'self-managed k8s', wire:'k8s',
+    cluster:true, apiServer:true, managed:false,
+    audit:{
+      plugin:'k8saudit', transport:'audit webhook', pull:false,
+      controller:'daemonset', replicas:null, single:false,
+      driver:true, collectors:true,
+      lbl:'k8saudit · webhook → falco (DaemonSet 同居)',
+      why:'apiserver の監査 webhook を Falco に向けられる。syscall を見ている'+
+          'その Falco がそのまま受けるので、監査用の別インスタンスは要らない'
+    },
+    caption:n => `KUBERNETES CLUSTER · ${n} NODES · DAEMONSET`
+  },
+  {
+    id:'eks', lbl:'EKS', jp:'managed k8s · EKS', wire:'eks',
+    cluster:true, apiServer:true, managed:true,
+    audit:{
+      plugin:'k8saudit-eks', transport:'CloudWatch Logs', pull:true,
+      controller:'deployment', replicas:1, single:true,
+      driver:false, collectors:false,
+      lbl:'k8saudit-eks · Deployment · replicas: 1',
+      why:'プラグインが CloudWatch Logs から pull するので、2つ以上動かすと同じログを'+
+          '二重に取り、アラートが重複する。公式 Helm 値は controller.kind: deployment / '+
+          'replicas: 1 / driver.enabled: false / collectors.enabled: false — '+
+          '監査経路には DaemonSet ではなく単一の Deployment が建ち、そこはドライバも'+
+          'コレクタも無効'
+    },
+    caption:n => `EKS · ${n} NODES · DAEMONSET + AUDIT DEPLOYMENT (replicas 1)`
+  },
+  {
+    id:'gke', lbl:'GKE', jp:'managed k8s · GKE', wire:'gke',
+    cluster:true, apiServer:true, managed:true,
+    audit:{
+      plugin:'k8saudit-gke', transport:'Pub/Sub', pull:true,
+      controller:'deployment', replicas:3, single:false,
+      driver:null, collectors:null,
+      lbl:'k8saudit-gke · Deployment · replicas: 複数可',
+      why:'Pub/Sub の exactly-once 配信を使うので、単一リージョン内なら複数インスタンスが'+
+          '明示的に許されている。EKS の単一インスタンス制約をここに一般化してはいけない'
+    },
+    caption:n => `GKE · ${n} NODES · DAEMONSET + AUDIT DEPLOYMENT`
+  },
+  {
+    id:'aks', lbl:'AKS', jp:'managed k8s · AKS', wire:'aks',
+    cluster:true, apiServer:true, managed:true,
+    audit:{
+      plugin:'k8saudit-aks', transport:'Event Hub', pull:true,
+      controller:'deployment', replicas:1, single:false,
+      driver:null, collectors:null,
+      lbl:'k8saudit-aks · Deployment · Event Hub',
+      why:'Event Hub から pull する。単一インスタンスの注意書きは資料に無いので、'+
+          'この模型では単一必須だとは主張しない'
+    },
+    caption:n => `AKS · ${n} NODES · DAEMONSET + AUDIT DEPLOYMENT`
+  }
+];
+
+/* ---------- axis 2: node OS — the only place kmod can be impossible ---------- */
+const NODE_OSES = [
+  { id:'generic', lbl:'汎用 Linux', jp:'汎用 Linux', blocks:[], why:null },
+  { id:'cos', lbl:'COS', jp:'Container-Optimized OS',
+    blocks:['kmod'],
+    why:'COS はセキュリティ制約でカーネルモジュールを挿入できないので、Modern eBPF が必須。'+
+        'Falco が kmod 不可を文書化しているのはこの1件だけで、managed かどうかの話ではない' }
+];
+
+/* ---------- axis 3: container runtime socket ----------
+   The container plugin reads the runtime socket. Reach it and you get the
+   whole container.* space plus, in Kubernetes, the pod fields — because the
+   runtime knows which pod its containers belong to. Lose it and you keep
+   exactly the two fields the kernel can answer from the cgroup. */
+const SOCKETS = [
+  { id:'reachable', lbl:'到達可', jp:'ランタイムソケット 到達可',
+    containerFields:['container.id','container.type','container.name',
+                     'container.image.repository','container.image.tag',
+                     'container.privileged','container.mount.*','… 約28'],
+    podFields:['k8s.ns.name','k8s.pod.name','k8s.pod.id','k8s.pod.uid',
+               'k8s.pod.sandbox_id','k8s.pod.label[*]','k8s.pod.ip',
+               'k8s.pod.cni.json'],
+    why:'container プラグインが CRI / docker ソケットからコンテナのメタデータを取る。'+
+        'DaemonSet か systemd かとは直交する — ソケットに届くかどうかだけの問題' },
+  { id:'unreachable', lbl:'不可', jp:'ランタイムソケット 到達不可',
+    containerFields:['container.id','container.type'],
+    podFields:[],
+    why:'cgroup から取れる container.id と container.type だけが残る。'+
+        'この2つはカーネル内で決まるのでソケットを必要としない' }
+];
+
+/* ---------- axis 4: k8smeta plugin — the API-server-derived fields ----------
+   Falco 0.37 removed the built-in k8s client. The deployment / replicaset /
+   service / replicationcontroller names now come from the k8smeta plugin
+   talking to k8s-metacollector (still marked experimental), and the old
+   k8s.* spellings evaluate to <NA> in rules. k8s.pod.* is NOT in that list:
+   it survives because its source is the container runtime, not the API. */
+const K8S_METAS = [
+  { id:'on', lbl:'有', jp:'k8smeta プラグイン 有',
+    fields:['k8smeta.pod.name','k8smeta.ns.name','k8smeta.deployment.name',
+            'k8smeta.rs.name','k8smeta.svc.name'],
+    naFields:[],
+    why:'k8smeta プラグイン ＋ k8s-metacollector で apiserver 由来のフィールドが付く。'+
+        'k8s.pod.name とは併用可（置き換えではなく追加）' },
+  { id:'off', lbl:'無', jp:'k8smeta プラグイン 無',
+    fields:[],
+    naFields:['k8s.deployment.name','k8s.rs.name','k8s.svc.name','k8s.rc.name'],
+    why:'非推奨になった k8s.deployment.name 系はルールで使うと <NA> になる。'+
+        'ワークロード名で相関したいなら k8smeta を入れるしかない' }
+];
+
+/* ---------- the driver lever ----------
+   Not one of the four environment axes — it is the operator's choice — but
+   it is declared here because the node OS axis is allowed to forbid values
+   and because `nodriver` is what switches the kernel path off. Per the
+   docs, nodriver does not delete the syscall source; it means no
+   kernel→userspace ring buffer, so only plugins actually deliver events. */
+const DRIVERS = [
+  { id:'modern_ebpf', lbl:'modern_ebpf', kernelPath:true, slab:true,
+    note:'CO-RE eBPF。kernel ≥ 5.8、ビルド不要。0.38 以降の既定' },
+  { id:'ebpf', lbl:'ebpf', kernelPath:true, slab:true,
+    note:'legacy eBPF プローブ。2026-12-04 に廃止予定' },
+  { id:'kmod', lbl:'kmod', kernelPath:true, slab:true,
+    note:'カーネルモジュール。完全な権限が必要。COS では挿入できない' },
+  { id:'nodriver', lbl:'nodriver', kernelPath:false, slab:false,
+    note:'ドライバを注入しない。カーネル→ユーザ空間のリングバッファが無いので、'+
+         '実際にイベントを届けるのはプラグインだけになる' }
+];
+
+/* ---------- the west end, as geometry ----------
+   Geometry only cares about three shapes, so only three get built. Which one
+   is on screen follows from the composed environment, not from an id.
+
+     shape    'nodes'   node pads carrying pods — a cluster
+              'machine' one slab carrying named processes — a single host
+              'none'    no syscall-emitting west end to draw (nodriver)
+     nodes    how many pads. The district's own depth is derived from the
+              largest count declared here, so the layout engine re-flows the
+              rest of the city on its own — no coordinate needs touching   */
+const TOPOLOGIES = [
+  { id:'machine', shape:'machine', nodes:1, boundary:false,
+    /* fewer, taller, named — a host is not a pile of interchangeable pods */
+    procs:[['systemd',13],['sshd',7],['nginx',16],['cron',5],
+           ['postgres',19],['node',11],['dockerd',9],['rsyslog',6]],
+    procsPerRow:4, slabW:26, slabD:34 },
+  { id:'cluster', shape:'nodes', nodes:3, podsPerNode:5, boundary:true },
+  { id:'bare', shape:'none', nodes:0, boundary:false }
+];
 
 /* Ceiling on node count. From 4 nodes up, the workloads district becomes the
    deepest thing on the flow axis and starts pushing the north annexes outward.
@@ -59,52 +239,8 @@ const nodeOffsets = n => Array.from({length:n}, (_, i) => (i - (n-1)/2) * NODE_P
 /* how deep the workloads district has to be: workloadsDepth(3) === 38 */
 const workloadsDepth = n => n * NODE_PITCH + NODE_MARGIN;
 
-const DEPLOYMENTS = [
-  {
-    id:'host', env:'standalone', jp:'スタンドアロンサーバ', shape:'machine',
-    nodes:1,
-    cluster:false, apiServer:false, kernelPath:true, k8sMeta:false,
-    shield:{ host:true, cluster:false },
-    /* fewer, taller, named — a host is not a pile of interchangeable pods */
-    procs:[['systemd',13],['sshd',7],['nginx',16],['cron',5],
-           ['postgres',19],['node',11],['dockerd',9],['rsyslog',6]],
-    procsPerRow:4, slabW:26, slabD:34,
-    caption:() => 'SINGLE HOST · falco.service (systemd)'
-  },
-  {
-    id:'k8s', env:'self-managed-k8s', jp:'self-managed k8s', shape:'nodes',
-    nodes:3, podsPerNode:5,
-    cluster:true, apiServer:true, kernelPath:true, k8sMeta:true,
-    shield:{ host:true, cluster:true },
-    caption:n => `KUBERNETES CLUSTER · ${n} NODES · DAEMONSET`
-  },
-  {
-    /* drawn identically to self-managed for now. Kept as its own entry so the
-       two can diverge without another refactor — the real difference is that
-       kmod is not available and the control-plane audit arrives by a different
-       route, and neither of those is geometry. */
-    id:'managed', env:'managed-k8s', jp:'managed k8s (EKS/GKE/AKS)', shape:'nodes',
-    nodes:3, podsPerNode:5,
-    cluster:true, apiServer:true, kernelPath:true, k8sMeta:true,
-    shield:{ host:true, cluster:true },
-    caption:n => `MANAGED CLUSTER · ${n} NODES · DAEMONSET`
-  },
-  {
-    /* no driver and no ring buffer, so there is no syscall-emitting west end
-       to draw at all — the plugin lane is the whole story */
-    id:'plugins', env:'serverless', jp:'サーバレス／特権なし', shape:'none',
-    nodes:0,
-    cluster:false, apiServer:true, kernelPath:false, k8sMeta:true,
-    shield:{ host:false, cluster:false },
-    caption:() => ''
-  }
-];
-
-const byDeployId  = id  => DEPLOYMENTS.find(x => x.id  === id);
-const byEnv       = env => DEPLOYMENTS.find(x => x.env === env);
-
 /* Node count is module-local on purpose: it belongs in S, and state.js is
-   another session's file this phase. `?nodes=N` overrides every clustered
+   another session's file this phase. `?nodes=N` overrides the clustered
    topology so the layout can be checked at 1 / 2 / 3 / 5 / 8 without an edit.
    Guarded for Node, where the check scripts import this module with no DOM. */
 const nodeOverride = (() => {
@@ -112,8 +248,178 @@ const nodeOverride = (() => {
   const n = Number(new URLSearchParams(location.search).get('nodes'));
   return Number.isInteger(n) && n >= 1 ? Math.min(n, NODE_MAX) : null;
 })();
-const nodeCount = dep => dep.shape === 'nodes' ? (nodeOverride ?? dep.nodes) : dep.nodes;
-const MAX_NODES = Math.max(...DEPLOYMENTS.map(nodeCount));
+const nodeCount = t => t.shape === 'nodes' ? (nodeOverride ?? t.nodes) : t.nodes;
+const MAX_NODES = Math.max(...TOPOLOGIES.map(nodeCount));
+const byTopologyId = id => TOPOLOGIES.find(t => t.id === id);
+/* how many pads a cluster actually has — captions need it before compose runs */
+const CLUSTER_NODES = nodeCount(byTopologyId('cluster'));
+
+
+/* ============================================================
+   1a-2. the axes as levers, and the composition
+   ------------------------------------------------------------
+   ENV_AXES is what controls.js renders. ENV_SEL is what is selected. Both
+   live here rather than in state.js only because state.js belongs to another
+   session this phase; controls.js is the single writer either way.
+
+   composeEnv is a pure function of the selection. Everything downstream —
+   which west end is on screen, which audit route is built, which fields the
+   console log can print, which driver buttons are legal — reads a field it
+   returns. That is what keeps the environment ids out of controls.js and
+   log.js: they ask what is true, not which environment it is.
+   ============================================================ */
+const ENV_AXES = [
+  { id:'orch',    lbl:'orchestrator',  values:ORCH,
+    hint:'k8saudit の取得経路が変わる' },
+  { id:'nodeOs',  lbl:'node os',       values:NODE_OSES,
+    hint:'COS は kmod をロードできない' },
+  { id:'socket',  lbl:'runtime socket', values:SOCKETS,
+    hint:'container.* と k8s.pod.* が付くか' },
+  { id:'k8sMeta', lbl:'k8smeta',       values:K8S_METAS,
+    hint:'k8s.deployment.name 系が付くか' }
+];
+
+const ENV_SEL = {
+  orch:'k8s', nodeOs:'generic', socket:'reachable', k8sMeta:'on',
+  driver:'modern_ebpf'
+};
+
+const pick = (list, id, fallback) => list.find(x => x.id === id) ?? fallback;
+
+function composeEnv(sel = ENV_SEL){
+  const orch   = pick(ORCH,       sel.orch,    ORCH[1]);
+  const nodeOs = pick(NODE_OSES,  sel.nodeOs,  NODE_OSES[0]);
+  const socket = pick(SOCKETS,    sel.socket,  SOCKETS[0]);
+  const meta   = pick(K8S_METAS,  sel.k8sMeta, K8S_METAS[0]);
+  const driver = pick(DRIVERS,    sel.driver,  DRIVERS[0]);
+
+  const kernelPath = driver.kernelPath;
+  const cluster    = orch.cluster;
+  const apiServer  = orch.apiServer;
+  /* k8s-metacollector watches the API server, so the plugin has nothing to
+     talk to without one. Selecting it is still allowed and remembered — the
+     axis stays independent; it just has no consequence to cause. */
+  const k8sMeta = meta.id === 'on' && apiServer;
+  /* pod fields ride the runtime socket, but only pods have them: the socket
+     on a plain host can name containers and cannot invent a namespace */
+  const podFields = cluster ? socket.podFields : [];
+
+  return {
+    id:[orch.id, nodeOs.id, socket.id, meta.id, driver.id].join('/'),
+    orch, nodeOs, socket, meta, driver,
+    /* the legacy wire value S.deploy carries. state.js, sim.js and
+       campaign.js still compare against these strings and belong to other
+       sessions this phase, so keep feeding them something they understand. */
+    wire: kernelPath ? orch.wire : 'plugins',
+    cluster, apiServer, managed:orch.managed, kernelPath,
+    k8sMeta, k8sMetaAsked: meta.id === 'on',
+    blockedDrivers: nodeOs.blocks,
+    containerFields: socket.containerFields,
+    podFields,
+    metaFields: k8sMeta ? meta.fields : [],
+    naFields:   k8sMeta ? [] : meta.naFields,
+    /* the audit log exists whether or not a driver does — that is the point
+       of (b): k8saudit runs on a host, and it runs with nodriver */
+    audit: orch.audit,
+    topology: !kernelPath ? 'bare' : cluster ? 'cluster' : 'machine',
+    /* Host Shield is the driver-bearing half, so nodriver leaves none of it.
+       Cluster Shield is cluster-scoped and driverless (admission / audit /
+       posture / vuln mgmt), so it survives wherever there is a cluster. */
+    shield:{ host:kernelPath, cluster }
+  };
+}
+
+let _env = composeEnv();
+const currentEnv = () => _env;
+/* set one axis. Returns the recomposed environment so the caller can react
+   without asking twice. Unknown axes and values are ignored on purpose. */
+function setEnvAxis(axis, value){
+  if(!(axis in ENV_SEL)) return _env;
+  ENV_SEL[axis] = value;
+  _env = composeEnv();
+  return _env;
+}
+
+/* ============================================================
+   1a-3. named environments
+   ------------------------------------------------------------
+   The axes are the truth. These are named POSITIONS on them, and they exist
+   because a scenario has to hand the player a place — "you inherited a
+   self-managed cluster" — rather than four dropdowns. Every attribute below
+   is DERIVED by composeEnv, so a named environment cannot disagree with the
+   axes it stands on.
+
+     id       the wire value S.deploy carries, and what setDeploy() takes
+     env      the scenario-facing name (scenarios/schema.js §ENVIRONMENTS)
+     nodeOs   which node OS axis value this environment stands on
+     kmodOk   whether a kernel module can be loaded here. FALSE ONLY where the
+              node OS forbids it. **Not** because a cluster is managed: EKS
+              and AKS have no documented kmod restriction, and asserting one
+              is exactly the error this table used to carry
+     drivers  the driver ids that are legal here, derived from kmodOk and from
+              whether there is a kernel path at all. Ready for the scenario
+              layer to use directly, so nothing downstream has to re-derive it
+
+   GKE is the one named environment that stands on COS, because that is what
+   Falco documents GKE as using. Even there the constraint belongs to the node
+   image and not to GKE: the node OS axis is switchable underneath it.
+   ============================================================ */
+const DEPLOY_PRESETS = {
+  host:    { orch:'none', nodeOs:'generic', socket:'reachable', k8sMeta:'off',
+             driver:'modern_ebpf' },
+  k8s:     { orch:'k8s',  nodeOs:'generic', socket:'reachable', k8sMeta:'on',
+             driver:'modern_ebpf' },
+  eks:     { orch:'eks',  nodeOs:'generic', socket:'reachable', k8sMeta:'on',
+             driver:'modern_ebpf' },
+  gke:     { orch:'gke',  nodeOs:'cos',     socket:'reachable', k8sMeta:'on',
+             driver:'modern_ebpf' },
+  aks:     { orch:'aks',  nodeOs:'generic', socket:'reachable', k8sMeta:'on',
+             driver:'modern_ebpf' },
+  plugins: { orch:'k8s',  nodeOs:'generic', socket:'unreachable', k8sMeta:'on',
+             driver:'nodriver' }
+};
+/* the old wire value for managed Kubernetes, before the providers were split
+   apart. Kept so `setDeploy('managed')` from a console or a bookmark still
+   lands somewhere sensible. */
+DEPLOY_PRESETS.managed = DEPLOY_PRESETS.eks;
+
+const NAMED_ENVS = [
+  { id:'host',    env:'standalone',       jp:'スタンドアロンサーバ' },
+  { id:'k8s',     env:'self-managed-k8s', jp:'self-managed k8s' },
+  /* `managed-k8s` is EKS: it is the provider whose audit path is fully sourced,
+     and keeping the name means scenarios written against it do not move */
+  { id:'eks',     env:'managed-k8s',      jp:'managed k8s · EKS' },
+  { id:'gke',     env:'managed-k8s-cos',  jp:'managed k8s · GKE (COS ノード)' },
+  { id:'aks',     env:'managed-k8s-aks',  jp:'managed k8s · AKS' },
+  { id:'plugins', env:'serverless',       jp:'サーバレス／特権なし (nodriver)' }
+];
+
+const DEPLOYMENTS = NAMED_ENVS.map(n => {
+  const env = composeEnv(DEPLOY_PRESETS[n.id]);
+  const topo = byTopologyId(env.topology);
+  const kmodOk = !env.blockedDrivers.includes('kmod');
+  return {
+    ...env,
+    id:n.id, env:n.env, jp:n.jp,
+    /* geometry projection, so nodeCount() works on these entries too */
+    shape:topo.shape, nodes:nodeCount(topo),
+    /* the node OS axis, named, for anyone who needs the reason and not just
+       the consequence */
+    nodeOs:env.nodeOs.id, kmodOk,
+    drivers:env.kernelPath
+      ? DRIVERS.filter(d => d.slab && (d.id !== 'kmod' || kmodOk)).map(d => d.id)
+      : []
+  };
+});
+
+/* Look up a named environment. The live composition wins when it is the one
+   being asked about, so hasCap() in state.js follows the axes the player is
+   actually moving rather than the preset the scenario started from. */
+function byDeployId(id){
+  const live = currentEnv();
+  if(id === live.wire) return live;
+  return DEPLOYMENTS.find(d => d.id === id) || null;
+}
 
 
 /* ============================================================
@@ -143,18 +449,21 @@ const DISTRICTS = [
   {
     id:'driver', n:'02', tag:'DRIVER (KERNEL)',
     hoverT:'DRIVER — KERNEL SPACE', hoverS:'tracepoint にアタッチし、関心のある syscall だけを通す門',
-    hoverM:['modern_ebpf · ebpf · kmod','kernel-side filter = 最も安いフィルタ'],
-    jp:'ドライバ（カーネル空間）', en:'driver — modern_ebpf / ebpf / kmod',
+    hoverM:['modern_ebpf · ebpf · kmod · nodriver','kmod が不可なのは COS だけ'],
+    jp:'ドライバ（カーネル空間）', en:'driver — modern_ebpf / ebpf / kmod / nodriver',
     w:13, d:46, top:18, color:C.falco, cam:[-88,40,62],
-    metrics:[['既定','modern_ebpf (CO-RE)'],['要件','kernel ≥ 5.8']],
+    metrics:[['既定','modern_ebpf (CO-RE)'],['kmod 不可','COS（ノード OS 由来）']],
     body:`
 <h3>3つの目のうち、どれを使うか</h3>
 <ul>
-<li><code>modern_ebpf</code> — CO-RE eBPF。カーネル 5.8 以上、<strong>ビルド不要・カーネルモジュール不要</strong>。今の既定にして推奨</li>
-<li><code>ebpf</code> — 従来型 eBPF プローブ。<code>falco-probe.o</code> をカーネルに合わせて用意する必要がある</li>
-<li><code>kmod</code> — カーネルモジュール。古いカーネル向けの退路</li>
+<li><code>modern_ebpf</code> — CO-RE eBPF。カーネル 5.8 以上、<strong>ビルド不要・カーネルモジュール不要</strong>。0.38 以降の既定</li>
+<li><code>ebpf</code> — 従来型 eBPF プローブ。<code>falco-probe.o</code> をカーネルに合わせて用意する必要がある（<strong>2026-12-04 に廃止予定</strong>）</li>
+<li><code>kmod</code> — カーネルモジュール。完全な権限が必要</li>
+<li><code>nodriver</code> — ドライバを注入しない。<span class="mark">syscall ソースが消えるのではなく、カーネル→ユーザ空間のリングバッファが無い</span>ので、実際にイベントを届けるのはプラグインだけになる</li>
 </ul>
-<p>さらに <strong>gVisor</strong> 経由、そしてドライバを一切使わない <strong>プラグインのみ（kernel-less）</strong> の動かし方もある。マネージド Kubernetes やサーバレス寄りの環境では後者が効く。</p>
+<h3>どこで <code>kmod</code> が選べないのか</h3>
+<p>「マネージド Kubernetes ではカーネルモジュールが使えない」は<strong>誤り</strong>。制約は<span class="mark">ノード OS の属性</span>で、コントロールプレーンを誰が運用しているかとは無関係。Falco が文書化しているのは <strong>GKE の Container-Optimized OS (COS)</strong> ただ1件で、EKS・AKS はそのページに登場しない。</p>
+<p>だから NODE OS を <code>COS</code> にすると <code>kmod</code> のボタンが落ちる。ORCHESTRATOR を動かしても落ちない。</p>
 <h3>ここが一番安いフィルタ</h3>
 <p>ドライバは <code>sys_enter</code> / <code>sys_exit</code> / <code>sched_process_exit</code> などの tracepoint にアタッチし、<span class="mark">関心のある syscall だけ</span>を選んでリングバッファへ流す。関係ない大量の syscall はここで捨てる。</p>
 <p>この「捨てる場所がカーネル内である」ことが性能の核心。ユーザ空間まで運んでから捨てるのは、運ぶコストを丸ごと払うのと同じ。</p>
@@ -162,19 +471,28 @@ const DISTRICTS = [
   },
   {
     id:'ring', n:'03', tag:'RING BUFFER',
-    hoverT:'PER-CPU RING BUFFER', hoverS:'カーネルが書き、ユーザ空間が読む共有メモリ',
-    hoverM:['8 MiB / CPU (default preset)','唯一「落ちる」場所 — n_drops'],
-    jp:'リングバッファ', en:'per-cpu ring buffer',
+    hoverT:'RING BUFFERS', hoverS:'カーネルが書き、ユーザ空間が読む共有メモリ',
+    hoverM:['既定 8 MiB × ceil(nCPU ÷ 2) 本','唯一「落ちる」場所 — n_drops'],
+    jp:'リングバッファ', en:'shared ring buffers',
     w:27, d:38, top:9, color:C.g30, cam:[-46,38,66],
-    metrics:[['既定サイズ','8 MiB / CPU'],['危険信号','n_drops > 0']],
+    metrics:[['既定','1バッファ 8 MiB · 2 CPU で共有'],['危険信号','n_drops > 0']],
     body:`
 <h3>唯一、イベントが失われる場所</h3>
-<p>ドライバが選んだイベントは <strong>CPU ごとのリングバッファ</strong>（共有メモリ）に書かれ、ユーザ空間がそれを時刻順に読む。カーネルは待たない。ユーザ空間の読み出しが追いつかなければ、<span class="mark">新しいイベントは静かに捨てられる</span>。</p>
+<p>ドライバが選んだイベントは<strong>共有メモリのリングバッファ</strong>に書かれ、ユーザ空間がそれを時刻順に読む。カーネルは待たない。ユーザ空間の読み出しが追いつかなければ、<span class="mark">新しいイベントは静かに捨てられる</span>。</p>
+<h3>「CPU ごとに1本」ではない（既定では）</h3>
+<p>ここは間違えやすい。<strong><code>kmod</code> では CPU ごとだが、既定の <code>modern_ebpf</code> では CPU ペアごと</strong>。</p>
+<ul>
+<li><code>cpus_for_each_buffer</code> は <code>modern_ebpf</code> 専用で<strong>既定 2</strong> = 1つのバッファを 2 CPU で共有する（<code>1</code> で CPU ごと ＝ <code>ebpf</code> の既定、<code>0</code> で全オンライン CPU で1つ）</li>
+<li>バッファ数は <span class="mark"><code>ceil(オンライン CPU 数 ÷ この値)</code></span>。falco.yaml のコメントが「CPU 7個・既定 2 → <strong>バッファ4個</strong>」を図で実演している</li>
+<li><code>buf_size_preset</code> の 8 MiB は<strong>1バッファのサイズ</strong>。しかもバッファは仮想メモリに<strong>二重にマップ</strong>されるので、8 MiB のバッファは仮想メモリ上 <strong>16 MiB</strong> を占める</li>
+<li>現行の設定キーは <code>engine.modern_ebpf.cpus_for_each_buffer</code> と <code>engine.&lt;engine&gt;.buf_size_preset</code>（右の TUNING パネルのラベルは旧名のまま）</li>
+</ul>
+<p>この地区が描いている8本のレーンは<strong>ノード数ではなく CPU 数</strong>の話。ノードを増やしても既存ノードのバッファは増えず、DaemonSet の Pod が増える。</p>
 <p>パイプライン全体で、イベントが本当に消えるのはここだけ。だから運用では真っ先にこの数字を見る。</p>
 <h3>ドロップを「見なかったことにしない」</h3>
 <p>Falco はドロップ自体を扱える。<code>syscall_event_drops</code> の設定で <code>ignore</code> / <code>log</code> / <code>alert</code> / <code>exit</code> を選べる。検知基盤が黙って盲目になるより、鳴らして気づくほうが正しい。</p>
 <ul>
-<li>バッファサイズは <code>syscall_buf_size_preset</code> で調整（既定は 8 MiB/CPU 相当）</li>
+<li>バッファサイズは <code>buf_size_preset</code> で調整（既定 preset 4 = 1バッファ 8 MiB）</li>
 <li>ドロップが続くなら、まず <strong>入口を絞る</strong>（不要な syscall を落とす）。バッファを増やすのは次の手</li>
 <li>ノード負荷スライダを上げると、右の <em>event drops</em> が増えるのが見える</li>
 </ul>
@@ -193,10 +511,18 @@ const DISTRICTS = [
 <ul>
 <li><strong>スレッドテーブル</strong> — pid / tid / comm / exe / args / cwd / uid / loginuid、そして親子チェーン（<code>proc.pname</code>, <code>proc.aname[2]</code>）</li>
 <li><strong>FD テーブル</strong> — fd 番号 → ファイルパスやソケット（<code>fd.name</code>, <code>fd.sip</code>）</li>
-<li><strong>コンテナメタデータ</strong> — CRI ソケット経由で <code>container.id</code> / <code>container.image.repository</code></li>
-<li><strong>Kubernetes メタデータ</strong> — <code>k8smeta</code> プラグインで <code>k8s.ns.name</code> / <code>k8s.pod.name</code> / labels</li>
+<li><strong>コンテナメタデータ</strong> — <code>container</code> プラグインが<span class="mark">コンテナランタイムのソケット</span>から取る。<code>container.name</code> / <code>container.image.repository</code> ほか約28フィールド</li>
+<li><strong>Kubernetes メタデータ</strong> — <strong>2系統ある</strong>（次節）</li>
 </ul>
 <p>この層があるから、はじめて <span class="mark">「payments 名前空間の nginx コンテナの中で、root が /etc/shadow を読んだ」</span> と言える。ルールが人間の言葉で書けるのは、ここが下支えしているから。</p>
+<h3>k8s メタデータのガントリーは2本ある</h3>
+<p>ここは間違えやすい。Kubernetes のフィールドは<strong>出どころが2つに分かれている</strong>。</p>
+<ul>
+<li><strong>ランタイム由来（ソケット）</strong> — <code>k8s.ns.name</code> / <code>k8s.pod.name</code> / <code>k8s.pod.uid</code> / <code>k8s.pod.label[*]</code> / <code>k8s.pod.ip</code> など。コンテナランタイムが「このコンテナはどの Pod のものか」を知っているので付く。<span class="mark">ソケットに届かなければ、この系統ごと消える</span></li>
+<li><strong>API サーバ由来（k8smeta プラグイン）</strong> — <code>k8smeta.deployment.name</code> など。Falco 0.37 で本体の k8s クライアントが廃止され、<code>k8smeta</code> プラグイン ＋ <code>k8s-metacollector</code>（experimental）に分離された。非推奨になった <code>k8s.deployment.name</code> / <code>k8s.rs.name</code> / <code>k8s.svc.name</code> / <code>k8s.rc.name</code> は<span class="mark">ルールで使うと <code>&lt;NA&gt;</code></span></li>
+</ul>
+<p>ソケットが死んでも残るのは <code>container.id</code> と <code>container.type</code> だけ。この2つは cgroup からカーネル内で決まるので、ソケットを必要としない。</p>
+<p>逆に <code>k8s.pod.name</code> が Falco 0.37 の廃止を生き延びたのは、<span class="mark">出どころが API サーバではなくコンテナランタイムだから</span>。同じ「k8s.」で始まるのに寿命が違う理由がこれ。</p>
 <h3>コストの正体</h3>
 <p>この状態管理がメモリを使う。プロセスが激しく生成消滅する環境ではスレッドテーブルが膨らむ。「Falco が重い」と言われるとき、犯人はドライバではなくここか、次のルール層のことが多い。</p>
 <div class="takeaway"><span class="cv">▸</span>検知の質は、貼れる文脈の量で決まる。文脈のない syscall は騒音。</div>`
@@ -244,18 +570,38 @@ const DISTRICTS = [
     hoverT:'PLUGIN INPUTS (BYPASS LANE)', hoverS:'syscall 以外の入力も同じルールエンジンへ',
     hoverM:['k8saudit · cloudtrail · gcpaudit','okta · github · json'],
     jp:'プラグイン入力', en:'plugin inputs — bypass lane',
-    w:22, d:22, top:12, lane:'north', after:'workloads', dx:-2, color:0xF3C99A, cam:[-96,40,10],
+    /* wider and deeper than the rest of the north lane because the audit
+       route lives here: an apiserver, a transport, and — on managed
+       Kubernetes — a whole separate Deployment doing the collecting */
+    /* No hand-picked camera any more. The old one sat south of the workloads
+       district and looked north straight through it, and it could not follow
+       the node count — this district's z is derived from how deep the
+       workloads district got. layout.js derives an approach from the west for
+       off-flow lanes, which follows the layout for free. */
+    w:34, d:26, top:12, lane:'north', after:'workloads', dx:-2, color:0xF3C99A,
     metrics:[['入力側','k8saudit / cloudtrail / gcpaudit / okta / github'],['共通点','同じルール言語で書ける']],
     body:`
 <h3>カーネルの外の出来事も同じ言語で</h3>
 <p>Falco の入力は syscall だけではない。<strong>プラグイン</strong>がイベントソースを増やす — <code>k8saudit</code>（Kubernetes 監査ログ）、<code>cloudtrail</code>、<code>gcpaudit</code>、<code>okta</code>、<code>github</code>、汎用の <code>json</code>。</p>
 <p>重要なのは、これらが <span class="mark">同じルールエンジンに合流する</span>こと。「特権 Pod が作られた」「S3 バケットが公開された」「管理者ロールが付与された」を、syscall 検知と同じ書き方・同じ出力経路で扱える。</p>
 <h3>この道はドライバを通らない</h3>
-<p>プラグイン入力はカーネルのドライバもリングバッファも経由しない。だから <strong>ドライバなしで Falco を動かす</strong>構成も成り立つ（kernel-less）。カーネルに触れないマネージド環境で、クラウド側のイベントだけを見る使い方。</p>
+<p>プラグイン入力はカーネルのドライバもリングバッファも経由しない。だから <strong>ドライバなしで Falco を動かす</strong>構成も成り立つ（<code>nodriver</code>）。クラウド側のイベントだけを見る使い方。</p>
 <ul>
 <li>入力プラグインは1プロセスに1つが基本。用途ごとに Falco を分けて動かす構成が実務的</li>
 <li>抽出（extractor）プラグインを足すと、既存イベントから新しいフィールドを引ける</li>
 </ul>
+<h3>監査ログの「取り方」で街の形が変わる</h3>
+<p><code>k8saudit</code> は Kubernetes の監査ログを読む。<span class="mark">問題はどうやって手に入れるか</span>で、ここがオーケストレータ軸の正体。</p>
+<ul>
+<li><strong>self-managed</strong> — apiserver の監査 webhook を Falco に向けられる。syscall を見ている<em>その</em> Falco がそのまま受けるので、監査用の別インスタンスは要らない</li>
+<li><strong>managed</strong> — apiserver の起動オプションを触れないので webhook が張れない。プロバイダ別プラグインが<span class="mark">ログの置き場から pull する</span> — EKS は CloudWatch Logs、AKS は Event Hub、GKE は Pub/Sub</li>
+</ul>
+<h3>EKS だけは単一インスタンス</h3>
+<p><code>k8saudit-eks</code> は CloudWatch Logs から pull するので、<strong>2つ動かすと同じログを二重に取り、アラートが重複する</strong>。公式 Helm 値がそのまま答えになっている — <code>controller.kind: deployment</code> / <code>replicas: 1</code> / <code>driver.enabled: false</code> / <code>collectors.enabled: false</code>。</p>
+<p>つまり EKS の監査経路では <span class="mark">DaemonSet ではなく replicas 1 の Deployment が建ち、そこはドライバもコレクタも無効</span>。ノード上の DaemonSet とは<strong>別の建物</strong>で、役割も違う。DEPLOY で EKS を選ぶと、この地区にその1棟が建つ。</p>
+<p><strong>GKE に一般化してはいけない。</strong>Pub/Sub の exactly-once 配信を使うので、単一リージョン内なら複数インスタンスが明示的に許されている。AKS には単一インスタンスの注意書きが無いので、この模型でも主張しない。</p>
+<h3>ソース間の相関はしない</h3>
+<p>ルールは<strong>イベントソースごとに分割</strong>される。<code>aws_cloudtrail</code> は <code>ct.*</code> という別のフィールド空間を持つ別ソースで、<span class="mark">Falco はソース間の相関をしない</span>。だから「クラウド API の操作が syscall ルールに当たる」ことは原理的に起きない。これはドライバの有無とは無関係な、もっと強い理由。</p>
 <div class="takeaway"><span class="cv">▸</span>検知の言語をひとつに揃えると、運用が増えても複雑さが増えない。</div>`
   },
   {
@@ -327,8 +673,21 @@ export {
   DISTRICTS,
   DEPLOYMENTS,
   byDeployId,
-  byEnv,
+  ORCH,
+  NODE_OSES,
+  SOCKETS,
+  K8S_METAS,
+  DRIVERS,
+  TOPOLOGIES,
+  ENV_AXES,
+  ENV_SEL,
+  DEPLOY_PRESETS,
+  composeEnv,
+  currentEnv,
+  setEnvAxis,
+  byTopologyId,
   nodeCount,
+  CLUSTER_NODES,
   MAX_NODES,
   NODE_MAX,
   NODE_PITCH,
