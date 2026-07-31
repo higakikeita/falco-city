@@ -16,11 +16,13 @@ import { normalize, validateShape } from './schema.js';
 import greenfield from './greenfield.js';
 import inheritedAllSyscalls from './inherited-all-syscalls.js';
 import standaloneK8sRules from './standalone-k8s-rules.js';
+import rulesNotFollowed from './rules-not-followed.js';
 
 const RAW = [
   greenfield,
   inheritedAllSyscalls,
-  standaloneK8sRules
+  standaloneK8sRules,
+  rulesNotFollowed
 ];
 
 /* the scenario the game opens on */
