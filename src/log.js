@@ -13,33 +13,67 @@ import { PRIO, spawn, N } from './sim.js';
      [2] the output fields the rule itself prints
      [3] plugin event source, if it is not a syscall rule. These are the only
          rules that can fire with no kernel path
-     [4] a district that must be standing before this rule EXISTS at all, over
-         and above the pipeline that carries it
+     [4] RULE MATURITY: 'incubating' | 'sandbox'. Absent means stable.
+     [5] a capability the ENVIRONMENT has to have for the behaviour to be
+         possible at all — a key on currentEnv(). Absent means none.
 
-   [4] is why `Drop and execute new binary in container` is declared against
-   09 ルール配布: it is not in the Stable ruleset that ships in the release
-   package, so without falcoctl following the artifact the node never had the
-   rule. campaign.js states the same fact on its CHAIN step (`needs` includes
-   'falcoctl'), and it has to be stated twice for now because log.js cannot
-   import campaign.js — campaign.js → controls.js → log.js already, so the
-   import would close a cycle and ui.js's module body would run against a
-   half-initialised campaign.js. See the handover note.
+   [5] is why `Contact K8S API Server From Container` now names `apiServer`. On
+   the `standalone` preset the scoreboard says, in words, that there is no
+   Kubernetes API server here so "this behaviour cannot occur" — and the console
+   two panels away was printing that exact rule. `[3]` only gated the PLUGIN
+   sources, so a syscall rule written on a Kubernetes premise had nothing
+   stopping it.
+
+   ---------------------------------------------------------------- §maturity
+   [4] used to be "a district that must be standing", and the only rule carrying
+   it was `Drop and execute new binary in container`, pinned to 09 ルール配布.
+   That was backwards in both directions, and the console was contradicting the
+   scoreboard in the same frame:
+
+     - `Drop and execute new binary in container` is tagged `maturity_stable`,
+       so it IS in the release package and falcoctl has nothing to do with it.
+       INVARIANTS 4.3 records the same error against campaign.js's CHAIN step.
+     - meanwhile five genuinely non-stable rules had no gate at all and printed
+       freely. Measured in `inherited-all-syscalls` with 09 unbuilt: `Non sudo
+       setuid` (incubating) and `Detect crypto miners using the Stratum
+       protocol` (sandbox) reached this console while the panel beside it was
+       scoring the player as not having them.
+
+   The fact, once: the rules ship in three files and file maps 1:1 to maturity —
+   `falco_rules.yaml` (stable, 25) / `falco-incubating_rules.yaml` (31) /
+   `falco-sandbox_rules.yaml` (37) — and only the stable set is loaded by
+   default. incubating and sandbox are separate OCI artifacts, which is exactly
+   what 09 ルール配布 (falcoctl) is. So the gate is not a per-rule district any
+   more; it is derived from the maturity tag, in one line, below.
+
+   campaign.js states the same fact on its CHAIN steps and has to state it twice
+   for now, because log.js cannot import campaign.js — campaign.js →
+   controls.js → log.js already, so the import would close a cycle and ui.js's
+   module body would run against a half-initialised campaign.js.
    ============================================================ */
 const RULES_LOG = [
   ['Terminal shell in container', 2, 'user=root shell=bash parent=containerd-shim'],
-  ['Drop and execute new binary in container', 0, 'exe=/tmp/.x parent=sh', null, 'falcoctl'],
+  /* stable, so it needs no artifact — see §maturity and INVARIANTS 4.3 */
+  ['Drop and execute new binary in container', 0, 'exe=/tmp/.x parent=sh'],
   ['Read sensitive file untrusted', 1, 'file=/etc/shadow proc=cat'],
-  ['Write below etc', 1, 'file=/etc/cron.d/pwn proc=sh'],
-  ['Contact K8S API Server From Container', 2, 'connection=10.0.0.1:443 proc=curl'],
+  ['Write below etc', 1, 'file=/etc/cron.d/pwn proc=sh', null, 'sandbox'],
+  ['Contact K8S API Server From Container', 2, 'connection=10.0.0.1:443 proc=curl',
+   null, null, 'apiServer'],
+  /* the incubating example the attack chain's step 4 becomes (INVARIANTS 4.5):
+     credential theft from the instance metadata service. Real, and genuinely
+     not in the release package — which is what step 4 was claiming all along */
+  ['Contact EC2 Instance Metadata Service From Container', 1,
+   'connection=169.254.169.254:80 proc=curl', null, 'incubating'],
   ['Launch Privileged Container', 2, 'image=nginx:latest privileged=true'],
-  ['Detect crypto miners using the Stratum protocol', 0, 'proc=xmrig port=3333'],
+  ['Detect crypto miners using the Stratum protocol', 0, 'proc=xmrig port=3333',
+   null, 'sandbox'],
   ['Redirect STDOUT/STDIN to Network Connection in Container', 1, 'proc=bash fd=3'],
   ['Sudo Potential Privilege Escalation', 1, 'proc=sudoedit user=app'],
   ['Packet socket created in container', 3, 'proc=tcpdump'],
-  ['Clear Log Activities', 1, 'file=/var/log/auth.log proc=shred'],
+  ['Clear Log Activities', 1, 'file=/var/log/auth.log proc=shred', null, 'incubating'],
   ['Search Private Keys or Passwords', 2, 'proc=grep args=-r BEGIN RSA'],
-  ['Change thread namespace', 3, 'proc=nsenter'],
-  ['Non sudo setuid', 2, 'proc=node uid=0'],
+  ['Change thread namespace', 3, 'proc=nsenter', null, 'incubating'],
+  ['Non sudo setuid', 2, 'proc=node uid=0', null, 'incubating'],
   /* 4th element = plugin event source (not syscalls) → no syscall-side k8s.pod
      suffix, and these are the ONLY rules that can fire in kernel-less mode */
   ['K8s Secret Get Successfully', 2, 'ka.user=svc/deployer ka.target.name=db-creds ka.target.namespace=payments', 'k8saudit'],
@@ -70,6 +104,28 @@ function appendLine(html){
   el.innerHTML = html;
   clog.appendChild(el);
   while(clog.children.length > 26) clog.removeChild(clog.firstChild);
+}
+
+/* ---------- the console belongs to the situation you are standing in ----------
+   A scenario is a claim about what this estate can and cannot see, and the
+   console is the evidence for it. Carrying the previous scenario's lines across
+   the switch makes the new scenario's premise false on arrival: entering
+   `a-different-source` — whose whole point is that the cloud side never rings —
+   showed six leftover cloud alerts from the run before. The model was right and
+   the screen was lying, which is the worse of the two.
+
+   So the console is emptied when the situation changes. Everything in flight
+   goes with it: a line already in the queue was matched against the OLD estate,
+   so printing it after the switch would reintroduce exactly the same lie one
+   tick later. ui.js calls this on `scenario` and on `mode`, because it is the
+   module that hears the campaign feed — log.js cannot import campaign.js
+   (campaign.js → controls.js → log.js would close the cycle). */
+function resetLog(){
+  while(clog.firstChild) clog.removeChild(clog.firstChild);
+  logQueue.length = 0;
+  metaQueue.length = 0;
+  logCooldown = 0;
+  dropCool = 0;
 }
 
 /* syscall_event_drops.actions — the point being that `ignore` is a choice
@@ -145,9 +201,14 @@ function enrich(env){
 const SYSCALL_PATH = ['driver','ring','state','rules','outputs'];
 const PLUGIN_PATH  = ['plugins','rules','outputs'];
 const built = k => !GAME.on || GAME.built.has(k);
-/* [3] chooses the lane that carries it, [4] is a rule-specific supply line */
+/* Only the stable set ships in the release package; incubating and sandbox are
+   separate OCI artifacts, which is what 09 ルール配布 IS. See §maturity. */
+const NEEDS_ARTIFACT = {incubating:true, sandbox:true};
+/* [3] chooses the lane that carries it, [4] says whether the node was ever given
+   the rule, and [5] whether the environment can produce the behaviour */
 const standing = r =>
-  (r[3] ? PLUGIN_PATH : SYSCALL_PATH).every(built) && (!r[4] || built(r[4]));
+  (r[3] ? PLUGIN_PATH : SYSCALL_PATH).every(built)
+  && (!NEEDS_ARTIFACT[r[4]] || built('falcoctl'));
 
 function emitLog(prio){
   if(logQueue.length > 6) return;
@@ -177,6 +238,7 @@ function flushLog(dt){
   const pluginOnly = !env.kernelPath;
   const noAudit    = !env.audit;
   const ok = r => (!pluginOnly || !!r[3]) && !(noAudit && r[3] === 'k8saudit')
+                && (!r[5] || !!env[r[5]])          /* [5]: the place must allow it */
                 && standing(r);
   let pool = RULES_LOG.filter(r => r[1]===prio && ok(r));
   if(!pool.length) pool = RULES_LOG.filter(ok);
@@ -202,6 +264,7 @@ function flushLog(dt){
 export {
   emitLog,
   flushLog,
+  resetLog,
   onDrop,
   die,
   revive,

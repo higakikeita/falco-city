@@ -40,6 +40,14 @@ canvas{display:block}
 .ui{position:fixed;z-index:10}
 .ui,.ui *{pointer-events:none}
 .ui.interactive,.ui.interactive *{pointer-events:auto}
+/* The console is the one overlay with nothing to click in it: it is a readout,
+   and it is 470px wide sitting over the TUNING panel and the tour bar. While it
+   claimed pointer events, every lever below its top edge was unreachable —
+   `slow output`, the only correct move in `slow-output`, among them. So the box
+   is transparent to the mouse and only its toggle takes clicks. Selecting log
+   text is the thing given up, and nothing in the game asked for that. */
+#consoleWrap,#consoleBox,#consoleBox *{pointer-events:none}
+#ctoggle{pointer-events:auto}
 
 .panel{
   background:rgba(255,255,255,.94);
@@ -86,9 +94,43 @@ canvas{display:block}
 .cmp-hint{flex:none;font-size:11.5px;line-height:1.65;color:var(--grey-50);
   background:var(--grey-10);border-radius:8px;padding:9px 11px;margin:9px 0}
 .cmp-hint.good{background:rgba(189,247,139,.3);color:var(--grey-60)}
+/* Shown only where localStorage refuses (private mode, file://, full quota).
+   ui.js hides it otherwise, so in the normal case this costs the column zero
+   height — which matters, because at 1280x720 there is none to give. It is a
+   notice and not an error: save.js keeps the progress in memory, so everything
+   still works, it just does not outlive the tab. */
+.cmp-save{flex:none;font-size:10.5px;line-height:1.6;color:var(--grey-50);
+  background:rgba(255,169,64,.13);border-left:2px solid var(--orange);
+  border-radius:7px;padding:7px 10px;margin:9px 0 0}
+.cmp-save b{color:var(--grey-70);font-weight:600}
+.cmp-save[hidden]{display:none}
 .cmp-hint b{color:var(--black);font-weight:600}
 .cmp-hint code{font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,.05);
   padding:1px 4px;border-radius:3px}
+
+/* ---------- the goal strip ------------------------------------------------
+   Two or four short clauses, wrapping, always on screen while a scenario is
+   running. It costs the build list ~30px and it is worth them: the ask used to
+   be invisible until the pass was already scored, and `依頼は3件まで` cannot be
+   taken back once the fourth is spent. */
+.cmp-goal{flex:none;display:flex;flex-wrap:wrap;gap:4px;align-items:center;
+  margin-bottom:9px}
+.cmp-goal[hidden]{display:none}
+.cmp-goal .gl{font-family:var(--font-mono);font-size:8.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--grey-25);flex:none}
+.cmp-goal .gi{font-family:var(--font-mono);font-size:9px;letter-spacing:.04em;
+  padding:3px 7px;border-radius:5px;border-left:2px solid var(--grey-20);
+  background:var(--grey-10);color:var(--grey-50)}
+.cmp-goal .gi.met{border-left-color:var(--lumin);background:rgba(189,247,139,.26);
+  color:#4C8A22}
+.cmp-goal .gi.unmet{border-left-color:var(--orange);background:rgba(255,169,64,.13);
+  color:#8A5A16}
+
+/* which wave the rows below belong to — the steps are numbered across the whole
+   pass, so without this "step 4" in wave 2 has no anchor */
+.cmp-wave{font-family:var(--font-mono);font-size:9px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--grey-30);background:var(--grey-10);
+  padding:4px 8px;border-radius:6px;flex:none}
 
 /* The build list is the only place the game says what you may do next, so it
    gets the room before anything else does. It used to be capped at 150px with
@@ -202,34 +244,51 @@ canvas{display:block}
 .rnote code{font-family:var(--font-mono);font-size:10.5px;background:rgba(0,0,0,.05);
   padding:1px 4px;border-radius:3px}
 
-/* ---------- top-right: legend + hud ---------- */
+/* ---------- top-right: hud + levers ----------------------------------------
+   The right edge carries the symptoms (HUD), the levers (TUNING) and the
+   evidence (the console, which is anchored to the same corner from the bottom).
+   At the supported minimum of 1280x720 there are 680px for all three and they
+   want ~800, so ui.js §fitRightColumn measures it and spends the shortfall in a
+   fixed order: the legend goes first, then the console shrinks to a floor, and
+   the HUD and TUNING are never touched — a lever you cannot see is a scenario
+   you cannot solve. The paddings below are the tightened ones that made a
+   legible console possible at all; nothing here is spare. */
 #topRight{top:20px;right:20px;width:262px;display:flex;flex-direction:column;gap:10px;
   max-height:calc(100vh - 40px);overflow-y:auto;scrollbar-width:thin}
-.hud{padding:14px 16px}
+.hud{padding:12px 14px 13px}
 .hud h4{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
-  color:var(--grey-25);text-transform:uppercase;margin-bottom:10px}
+  color:var(--grey-25);text-transform:uppercase;margin-bottom:8px}
 .hudrow{display:flex;justify-content:space-between;align-items:baseline;
-  font-family:var(--font-mono);font-size:11.5px;padding:2.5px 0}
+  font-family:var(--font-mono);font-size:11.5px;padding:1.5px 0}
 .hudrow span:first-child{color:var(--grey-40)}
 .hudrow b{font-weight:400;font-variant-numeric:tabular-nums}
 .hudrow b.blue{color:#00A8BC}
 .hudrow b.red{color:var(--red-ui)}
 .hudrow b.dark{color:var(--black)}
 
+/* the load lever, inside the HUD panel — see the markup note */
+.hudload{margin-top:10px;padding-top:9px;border-top:1px solid var(--grey-10)}
+.hudload label{display:flex;justify-content:space-between;font-family:var(--font-mono);
+  font-size:9.5px;letter-spacing:.14em;color:var(--grey-25);text-transform:uppercase;
+  margin-bottom:8px}
+.hudload label b{color:var(--black);font-weight:400}
+
 /* ---------- verdict line: which kind of drop is this? ---------- */
-.verdict{margin-top:11px;padding:8px 10px;border-radius:7px;font-size:11px;line-height:1.55;
+.verdict{margin-top:10px;padding:7px 9px;border-radius:7px;font-size:11px;line-height:1.5;
   background:var(--grey-10);color:var(--grey-50);border-left:3px solid var(--grey-20)}
 .verdict.ok{background:rgba(189,247,139,.26);border-left-color:var(--lumin);color:var(--grey-60)}
 .verdict.burst{background:rgba(255,169,64,.15);border-left-color:var(--orange);color:#8A5A16}
 .verdict.sustained{background:rgba(234,82,85,.13);border-left-color:var(--red-ui);color:#9B2F32}
 .verdict.dead{background:var(--grey-90);border-left-color:var(--red-ui);color:#fff}
 .verdict b{font-weight:700;color:inherit}
+.verdict code{font-family:var(--font-mono);font-size:10px;background:rgba(0,0,0,.06);
+  padding:1px 4px;border-radius:3px}
 
 /* ---------- tuning panel ---------- */
-.tune{padding:14px 16px 15px}
+.tune{padding:12px 14px 13px}
 .tune h4{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
-  color:var(--grey-25);text-transform:uppercase;margin-bottom:12px}
-.trow{margin-bottom:13px}
+  color:var(--grey-25);text-transform:uppercase;margin-bottom:9px}
+.trow{margin-bottom:10px}
 .tlbl{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-30);margin-bottom:6px;
   display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 .tlbl b{color:var(--black);font-weight:400;white-space:nowrap}
@@ -240,7 +299,7 @@ canvas{display:block}
 .tseg button:hover{background:#fff;color:var(--black)}
 .tseg button.on{background:var(--black);color:#fff}
 .tchk{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10px;
-  color:var(--grey-40);cursor:pointer;margin-bottom:11px}
+  color:var(--grey-40);cursor:pointer;margin-bottom:9px}
 .tchk input{accent-color:var(--red-ui);width:13px;height:13px;cursor:pointer;flex:none}
 .treset{width:100%;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.11em;
   text-transform:uppercase;border:1px solid var(--grey-10);background:#fff;color:var(--grey-30);
@@ -252,15 +311,65 @@ canvas{display:block}
   font-size:10.5px;color:var(--grey-40);padding:3px 0}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 0 1px rgba(0,0,0,.06)}
 
-.slider{padding:13px 16px 15px}
-.slider label{display:flex;justify-content:space-between;font-family:var(--font-mono);
-  font-size:9.5px;letter-spacing:.14em;color:var(--grey-25);text-transform:uppercase;margin-bottom:9px}
-.slider label b{color:var(--black);font-weight:400}
+/* .panel.slider is gone — node load moved inside .hud (see .hudload) */
 input[type=range]{-webkit-appearance:none;width:100%;height:3px;background:var(--grey-10);
   border-radius:3px;outline:none}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;
   border-radius:50%;background:var(--black);cursor:pointer;border:2px solid #fff;
   box-shadow:0 1px 5px rgba(0,0,0,.25)}
+
+/* ---------- debrief (see the markup note) ----------------------------------
+   z-index 45: over every .ui panel (10) and the drawer (30), under the entrance
+   menu (70) — coming back to the title should never leave this on screen. */
+#debrief{position:fixed;inset:0;z-index:45;display:flex;align-items:center;
+  justify-content:center;padding:28px;background:rgba(247,248,248,.72);
+  backdrop-filter:blur(5px);opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .2s}
+#debrief.show{opacity:1;visibility:visible;pointer-events:auto}
+.dbcard{width:100%;max-width:648px;max-height:100%;overflow-y:auto;scrollbar-width:thin;
+  background:var(--white);border:1px solid var(--grey-10);border-radius:18px;
+  box-shadow:0 20px 64px rgba(0,0,0,.14);padding:22px 26px 20px}
+.dbhead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+  padding-bottom:14px;border-bottom:1px solid var(--grey-10)}
+.dbeyebrow{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.18em;
+  color:var(--grey-25);text-transform:uppercase}
+.dbtitle{font-size:19px;font-weight:600;margin-top:4px;line-height:1.35}
+.dbstamp{font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;padding:7px 13px;border-radius:8px;white-space:nowrap;flex:none}
+.dbstamp.win{background:var(--lumin);color:var(--black)}
+.dbstamp.lose{background:rgba(234,82,85,.13);color:#9B2F32;
+  border-left:2px solid var(--red-ui)}
+.dbbody{padding-top:14px;display:flex;flex-direction:column;gap:5px}
+.dbsec{font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;
+  color:var(--grey-25);text-transform:uppercase;margin:9px 0 1px}
+.dbsec:first-child{margin-top:0}
+/* THE PAYLOAD. Deliberately the largest type in the card and the widest measure
+   in the game: 13px/1.95 over 590px is ~40 characters a line, which is what the
+   230-character insight needs to read as prose instead of as a log entry. */
+.dbins{font-size:13px;line-height:1.95;color:var(--grey-60);
+  background:var(--grey-10);border-radius:10px;padding:14px 16px}
+.dbins .q{display:block;margin-bottom:9px;padding-bottom:9px;
+  border-bottom:1px dashed var(--grey-20)}
+.dbins b{color:var(--black);font-weight:600}
+.dbins .lbl{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--grey-30);display:block;margin-bottom:3px}
+.dbins code{font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,.05);
+  padding:1px 5px;border-radius:3px}
+.dbline{font-size:12px;line-height:1.75;color:var(--grey-50)}
+.dbline b{color:var(--black);font-weight:600}
+.dbfoot{display:flex;align-items:center;gap:11px;margin-top:18px;padding-top:15px;
+  border-top:1px solid var(--grey-10);flex-wrap:wrap}
+.dbgo{font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;border:0;background:var(--black);color:#fff;
+  padding:12px 22px;border-radius:9px;cursor:pointer;transition:.16s}
+.dbgo:hover{background:var(--grey-60)}
+.dbgo[hidden]{display:none}
+.dbghost{font-family:var(--font-mono);font-size:10px;letter-spacing:.11em;
+  text-transform:uppercase;border:1px solid var(--grey-20);background:var(--white);
+  color:var(--grey-40);padding:11px 16px;border-radius:9px;cursor:pointer;transition:.16s}
+.dbghost:hover{color:var(--black);border-color:var(--grey-40)}
+.dbnote{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-25);
+  letter-spacing:.1em;margin-left:auto;text-align:right;line-height:1.6}
 
 /* ---------- hover card (reference style) ---------- */
 #hoverCard{
@@ -313,6 +422,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 
 /* ---------- console ---------- */
 #consoleWrap{bottom:20px;right:20px;width:470px;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+/* ---- docked: the bottom strip -------------------------------------------
+   At 1280x720 the right edge has 680px and the HUD plus TUNING want ~600 of
+   them, so a legible console cannot also live there — and it used to solve that
+   by lying on top of the levers. ui.js §fitRightColumn moves it here instead:
+   `right:302px` keeps it clear of the right column, `bottom:62px` keeps it clear
+   of the tour bar, and the tour bar becomes a single scrolling row on the left of
+   the same strip. Nothing overlaps anything, at the resolution we support. */
+#consoleWrap.docked{left:376px;right:302px;bottom:75px;width:auto;align-items:stretch}
+body.condocked #tour{left:376px;transform:none;justify-content:flex-start;
+  max-width:340px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+body.condocked #tour::-webkit-scrollbar{display:none}
 #consoleBox{width:100%;background:var(--grey-90);border-radius:12px;overflow:hidden;
   box-shadow:0 14px 46px rgba(0,0,0,.3);display:none}
 #consoleBox.open{display:block}
@@ -321,7 +441,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 .cbar .l{width:9px;height:9px;border-radius:50%}
 .cbar .t{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-30);
   letter-spacing:.13em;margin-left:8px;text-transform:uppercase}
-#clog{height:186px;overflow:hidden;padding:9px 13px 11px;
+/* ui.js §fitRightColumn sets --clogh: this is the height the console gets when
+   there is room for all of it. The floor it will not go below is in that
+   function, with the reason. */
+#clog{height:var(--clogh,186px);overflow:hidden;padding:9px 13px 11px;
   font-family:var(--font-mono);font-size:10.5px;line-height:1.62;color:var(--grey-30);
   display:flex;flex-direction:column;justify-content:flex-end}
 #clog div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -486,9 +609,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     </div>
     <div class="cmp-sides" id="cmpSides"></div>
     <div class="cmp-roles" id="cmpRoles"></div>
+    <!-- unhidden by ui.js only when save.js reports that localStorage refuses.
+         Progress still works for the rest of the session; it is held in memory. -->
+    <div class="cmp-save" id="cmpSaveNote" hidden>
+      この環境では<b>進行を保存できません</b>（プライベートモードなど）。
+      クリアと解放はこのタブを開いているあいだ有効で、遊ぶことには影響しません。
+    </div>
     <div class="cmp-hint" id="cmpHint">
       いまは空き地。ワークロードは syscall を出しているが、受け止めるものが何も無い。
     </div>
+    <!-- what winning is, before you are scored on it. ui.js §goal fills it from
+         projection() and switches it to the result once the pass is over. -->
+    <div class="cmp-goal" id="cmpGoal" hidden></div>
     <div class="cmp-build" id="cmpBuild"></div>
     <button class="cmp-run" id="cmpRun">攻撃チェーンを流す</button>
     <div class="cmp-results" id="cmpResults"></div>
@@ -505,11 +637,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div class="hudrow"><span>alerts / min</span><b class="dark" id="mAlert">—</b></div>
     <div class="hudrow"><span>drain utilisation</span><b class="dark" id="mUtil">—</b></div>
     <div class="verdict" id="mVerdict">—</div>
-  </div>
-
-  <div class="panel slider">
-    <label>node load <b id="loadVal">×1.0</b></label>
-    <input type="range" id="loadRange" min="20" max="320" value="100">
+    <!-- NODE LOAD rides inside the HUD instead of owning a panel. It is an input
+         to everything above it, so it reads correctly here, and at 1280x720 the
+         panel border + padding + gap it used to cost (~39px) is the difference
+         between the console having a legible height and not existing. It keeps
+         its own id so ui.js can lock it when a scenario fixes the load. -->
+    <div class="hudload" id="loadWrap">
+      <label>node load <b id="loadVal">×1.0</b></label>
+      <input type="range" id="loadRange" min="20" max="320" value="100">
+    </div>
   </div>
 
   <div class="panel tune">
@@ -558,7 +694,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <button class="treset" id="tReset">reset to defaults</button>
   </div>
 
-  <div class="panel legend">
+  <!-- A colour key, and the only thing in this column that teaches nothing the
+       player has to act on — so it is the first pixel budget ui.js spends when
+       the console and the levers cannot both fit. At 1280x720 it was already
+       below the fold and unreachable; now that is a decision instead of a
+       side effect. -->
+  <div class="panel legend" id="legendPanel">
     <h4 style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.16em;color:var(--grey-25);text-transform:uppercase;margin-bottom:10px">legend</h4>
     <div class="lgrow"><i class="dot" style="background:#BBBDBF"></i>raw syscall</div>
     <div class="lgrow"><i class="dot" style="background:#00CBE2"></i>enriched event</div>
@@ -584,6 +725,38 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div id="clog"></div>
   </div>
   <button class="cbtn" id="ctoggle"><i class="pulse"></i><span>Console</span></button>
+</div>
+
+<!-- ============================================================
+     DEBRIEF — where the answer check actually fits
+     ------------------------------------------------------------
+     `insight.truth` is ~983 characters across the six scenarios and it is the
+     most valuable prose in the product: it is the sentence the player paid for.
+     It used to be appended to #cmpResults, which at 1280x720 is an 81px window
+     holding 926px of content, pinned to the bottom to follow the reveal — so
+     the first thing a player saw after a pass was the tail of the role
+     scorecard, and the diagnosis they had just earned was two scrolls away in a
+     box they had no reason to think was scrollable.
+     The left column has no 900px to give and never will. So the debrief stops
+     competing for it and takes the one region that is empty at every
+     resolution: the middle of the screen, over the city, once per pass.
+     ============================================================ -->
+<div id="debrief">
+  <div class="dbcard" id="dbCard">
+    <div class="dbhead">
+      <div>
+        <div class="dbeyebrow" id="dbEyebrow">debrief</div>
+        <div class="dbtitle" id="dbTitle"></div>
+      </div>
+      <div class="dbstamp" id="dbStamp"></div>
+    </div>
+    <div class="dbbody" id="dbBody"></div>
+    <div class="dbfoot">
+      <button class="dbgo" id="dbNext" hidden></button>
+      <button class="dbghost" id="dbClose">閉じて盤面に戻る</button>
+      <span class="dbnote" id="dbNote"></span>
+    </div>
+  </div>
 </div>
 
 <div id="hoverCard">
