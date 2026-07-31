@@ -445,6 +445,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button data-drv="ebpf">ebpf</button>
       <button data-drv="kmod">kmod</button>
     </div>
+    <!-- Sound is off until asked for: the AudioContext is created inside this
+         click and nowhere else, because browsers block autoplay. -->
+    <div class="panel seg" id="soundSeg">
+      <span class="caplbl">sound</span>
+      <button data-snd="off" class="on">Off</button>
+      <button data-snd="on">On</button>
+    </div>
   </div>
 
   <!-- Campaign panel sits below the lever rows on purpose: at 1280x720 it used

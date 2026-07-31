@@ -15,6 +15,7 @@ import {
   allowedDeploys, allowedDrivers
 } from './campaign.js';
 import { initMenu, plotTag, plotStyle } from './menu.js';
+import { initAudio, setMuted, audioState } from './audio.js';
 
 
 /* ============================================================
@@ -524,6 +525,7 @@ onCampaignChange(ev=>{
       [...document.querySelectorAll('#uiModeSeg button')].forEach(b=>
         b.classList.toggle('on', b.dataset.ui === ev.mode));
       document.getElementById('hint').classList.add('gone');
+      resetHudBaseline();
       if(GAME.on) showScenario();
       /* leaving campaign gives every lever back — the role only binds in play */
       else { elTitle.textContent = DEFAULT_MISSION;
@@ -532,6 +534,7 @@ onCampaignChange(ev=>{
       goHome();
       break;
     case 'scenario':
+      resetHudBaseline();
       showScenario();
       closeDrawer();
       goHome();
@@ -658,6 +661,17 @@ const els = {
 };
 const T0 = performance.now();
 let hudT = 0, lastC = {...S.counters};
+
+/* Switching mode or scenario zeroes S.counters, and every rate here is a delta
+   against the previous sample — so without dropping the baseline the first tick
+   after the switch reports a large *negative* syscall rate. That is one of the
+   frames a new player sees on the way in, and it reads as a broken instrument. */
+function resetHudBaseline(){
+  lastC = {...S.counters};
+  hudT = 0;
+  S.shown = {sys:0, ring:0, drop:0, rules:0, alerts:0};
+  S.alertWindow = [];
+}
 function updateHud(dt){
   hudT += dt;
   if(hudT < 0.42) return;
@@ -722,6 +736,35 @@ function fmt(n){
   if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
   if(n >= 1e3) return (n/1e3).toFixed(1)+'k';
   return Math.round(n).toString();
+}
+
+/* ============================================================
+   18. sound switch
+   ------------------------------------------------------------
+   The whole point of this control is *where the call happens*: an AudioContext
+   may only be created inside a real user gesture, so setMuted(false) runs in
+   the click handler itself and nowhere else. Default is off, so silence is the
+   correct state — what has to work is being able to turn it on.
+   ============================================================ */
+const elSnd = document.getElementById('soundSeg');
+function renderSound(){
+  const on = !audioState().muted;
+  elSnd.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('on', (b.dataset.snd === 'on') === on));
+}
+if(elSnd){
+  elSnd.querySelectorAll('button').forEach(b => b.onclick = ()=>{
+    setMuted(b.dataset.snd !== 'on');   /* creates the context, in this gesture */
+    initAudio();                        /* and resumes it if it was suspended */
+    renderSound();
+  });
+  renderSound();
+  /* The returning visitor whose saved preference is "on" still has no context:
+     it cannot exist before they touch something. One gesture, once. */
+  addEventListener('pointerdown', function armAudio(){
+    removeEventListener('pointerdown', armAudio, true);
+    initAudio();
+  }, true);
 }
 
 /* The entrance goes up last, so the button it adds to #uiModeSeg is wired after
