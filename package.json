@@ -5,7 +5,8 @@
   "description": "Falco / Sysdig runtime security pipeline as a walkable 3D city",
   "scripts": {
     "build": "node build.mjs",
-    "check": "node scripts/check-imports.mjs && node build.mjs && node scripts/check-build.mjs",
+    "test": "node scripts/regress.mjs",
+    "check": "node scripts/check-imports.mjs && node scripts/regress.mjs && node build.mjs && node scripts/check-build.mjs",
     "dev": "python3 -m http.server 8722 --directory src"
   },
   "devDependencies": {
