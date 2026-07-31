@@ -29,6 +29,8 @@ jobs:
       - run: npm ci
       - name: Every module imports what it uses
         run: node scripts/check-imports.mjs
+      - name: The causal claims still hold (INVARIANTS.md)
+        run: npm test
       - run: npm run build
       - name: Sanity-check the generated single file
         run: node scripts/check-build.mjs
