@@ -3,6 +3,120 @@ import { C } from './palette.js';
 
 
 /* ============================================================
+   1a. deployment topologies — the west end is rebuilt per deployment
+   ------------------------------------------------------------
+   Node count and the shape of the west end used to be baked into the
+   workloads builder (three pads, two hand-written variants, a caption that
+   said "3 NODES"). Anything about the environment that a future scenario
+   might want to vary is declared here instead:
+
+     shape    'nodes'   node pads carrying pods — a cluster
+              'machine' one slab carrying named processes — a single host
+              'none'    no west end at all (kernel-less: nothing to draw)
+     nodes    how many pads. The district's own depth is derived from the
+              largest count declared here, so the layout engine re-flows the
+              rest of the city on its own — no coordinate needs touching
+     caption  ground text, given the node count
+
+   The environment axis has four values, and self-managed and managed
+   Kubernetes are separate entries even though Phase 0 draws them the same —
+   what separates them is the driver choice and the audit path, which is
+   causal, not geometric, and belongs to another session.
+
+     env      the environment this topology represents
+     id       the wire value S.deploy carries. The three ids that already have
+              DEPLOY buttons keep their names, because those buttons and every
+              `S.deploy === '...'` comparison live in files this session does
+              not own. `managed` arrives without a button on purpose.
+
+   Adding a topology is a declaration in this array. The geometry side needs
+   nothing else.
+   ============================================================ */
+
+/* Pads sit on a fixed pitch, centred on the district. The constants are the
+   ones the hand-written three-node version worked out to, so a 3-node cluster
+   is geometrically identical to before. */
+const NODE_PITCH = 11.875;   // pad depth 10.4 + gap
+const NODE_MARGIN = 2.375;   // clearance at both ends of the district
+const NODE_PAD_W = 24, NODE_PAD_D = 10.4;
+const POD_PITCH = 4.8;
+
+/* Ceiling on node count. From 4 nodes up, the workloads district becomes the
+   deepest thing on the flow axis and starts pushing the north annexes outward.
+   Measured against the 340×240 ground plane (z must stay inside ±120):
+
+     nodes   4      8      11     12     14
+     depth   49.9   97.4   133.0  144.9  168.6
+     city z  -71.9  -95.7  -113.5 -119.4 -131.3  ← off the ground at 14
+
+   So 12 is the hard geometric edge, with 0.6 units to spare. 8 is the limit
+   here: it keeps ~24 units of margin and the pipeline still reads at the
+   1280×720 floor. No two districts overlap at any count from 1 to 20. */
+const NODE_MAX = 8;
+
+/* z of each pad, centred: nodeOffsets(3) === [-11.875, 0, 11.875] */
+const nodeOffsets = n => Array.from({length:n}, (_, i) => (i - (n-1)/2) * NODE_PITCH);
+/* how deep the workloads district has to be: workloadsDepth(3) === 38 */
+const workloadsDepth = n => n * NODE_PITCH + NODE_MARGIN;
+
+const DEPLOYMENTS = [
+  {
+    id:'host', env:'standalone', jp:'スタンドアロンサーバ', shape:'machine',
+    nodes:1,
+    cluster:false, apiServer:false, kernelPath:true, k8sMeta:false,
+    shield:{ host:true, cluster:false },
+    /* fewer, taller, named — a host is not a pile of interchangeable pods */
+    procs:[['systemd',13],['sshd',7],['nginx',16],['cron',5],
+           ['postgres',19],['node',11],['dockerd',9],['rsyslog',6]],
+    procsPerRow:4, slabW:26, slabD:34,
+    caption:() => 'SINGLE HOST · falco.service (systemd)'
+  },
+  {
+    id:'k8s', env:'self-managed-k8s', jp:'self-managed k8s', shape:'nodes',
+    nodes:3, podsPerNode:5,
+    cluster:true, apiServer:true, kernelPath:true, k8sMeta:true,
+    shield:{ host:true, cluster:true },
+    caption:n => `KUBERNETES CLUSTER · ${n} NODES · DAEMONSET`
+  },
+  {
+    /* drawn identically to self-managed for now. Kept as its own entry so the
+       two can diverge without another refactor — the real difference is that
+       kmod is not available and the control-plane audit arrives by a different
+       route, and neither of those is geometry. */
+    id:'managed', env:'managed-k8s', jp:'managed k8s (EKS/GKE/AKS)', shape:'nodes',
+    nodes:3, podsPerNode:5,
+    cluster:true, apiServer:true, kernelPath:true, k8sMeta:true,
+    shield:{ host:true, cluster:true },
+    caption:n => `MANAGED CLUSTER · ${n} NODES · DAEMONSET`
+  },
+  {
+    /* no driver and no ring buffer, so there is no syscall-emitting west end
+       to draw at all — the plugin lane is the whole story */
+    id:'plugins', env:'serverless', jp:'サーバレス／特権なし', shape:'none',
+    nodes:0,
+    cluster:false, apiServer:true, kernelPath:false, k8sMeta:true,
+    shield:{ host:false, cluster:false },
+    caption:() => ''
+  }
+];
+
+const byDeployId  = id  => DEPLOYMENTS.find(x => x.id  === id);
+const byEnv       = env => DEPLOYMENTS.find(x => x.env === env);
+
+/* Node count is module-local on purpose: it belongs in S, and state.js is
+   another session's file this phase. `?nodes=N` overrides every clustered
+   topology so the layout can be checked at 1 / 2 / 3 / 5 / 8 without an edit.
+   Guarded for Node, where the check scripts import this module with no DOM. */
+const nodeOverride = (() => {
+  if(typeof location === 'undefined') return null;
+  const n = Number(new URLSearchParams(location.search).get('nodes'));
+  return Number.isInteger(n) && n >= 1 ? Math.min(n, NODE_MAX) : null;
+})();
+const nodeCount = dep => dep.shape === 'nodes' ? (nodeOverride ?? dep.nodes) : dep.nodes;
+const MAX_NODES = Math.max(...DEPLOYMENTS.map(nodeCount));
+
+
+/* ============================================================
    1. district model  (flow runs along +X)
    ============================================================ */
 const DISTRICTS = [
@@ -11,7 +125,8 @@ const DISTRICTS = [
     hoverT:'WORKLOADS / PROCESSES', hoverS:'コンテナ・Pod・ホストのプロセス — すべての起点',
     hoverM:['execve · openat · connect · ptrace','~80 interesting syscalls'],
     jp:'ワークロード', en:'workloads / processes',
-    w:22, d:38, top:22, color:C.g20, cam:[-118,46,58],
+    /* depth follows the largest declared topology; 3 nodes === 38 as before */
+    w:22, d:workloadsDepth(MAX_NODES), top:22, color:C.g20, cam:[-118,46,58],
     metrics:[['観測対象','syscall + 一部の非 syscall'],['改造','アプリ変更ゼロ']],
     body:`
 <h3>ここで何が起きているか</h3>
@@ -209,5 +324,18 @@ const DISTRICTS = [
 ];
 
 export {
-  DISTRICTS
+  DISTRICTS,
+  DEPLOYMENTS,
+  byDeployId,
+  byEnv,
+  nodeCount,
+  MAX_NODES,
+  NODE_MAX,
+  NODE_PITCH,
+  NODE_MARGIN,
+  NODE_PAD_W,
+  NODE_PAD_D,
+  POD_PITCH,
+  nodeOffsets,
+  workloadsDepth
 };
