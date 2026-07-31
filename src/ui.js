@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS, byId, hex6 } from './layout.js';
-import { S, model, hasCap } from './state.js';
+import { S, model, noise, hasCap } from './state.js';
 import { camera, controls, renderer, scene, homeCam, homeView, goHome,
          HOME_TGT, flyTo, CITY_BOX } from './scene.js';
 import { districtObjs, hitTargets } from './city.js';
@@ -1183,7 +1183,7 @@ if(!CanvasRenderingContext2D.prototype.roundRect){
 const els = {
   sys:document.getElementById('mSys'), ring:document.getElementById('mRing'),
   drop:document.getElementById('mDrop'), rules:document.getElementById('mRules'),
-  alert:document.getElementById('mAlert')
+  alert:document.getElementById('mAlert'), buried:document.getElementById('mBuried')
 };
 const T0 = performance.now();
 let hudT = 0, lastC = {...S.counters};
@@ -1246,6 +1246,18 @@ function updateHud(dt){
   els.rules.textContent = fmt(S.shown.rules);
   els.alert.textContent = Math.round(apm);
   els.drop.className = dropPct > 0.2 ? 'red' : 'dark';
+
+  /* the second queue. Read straight from noise() rather than smoothed, for the
+     same reason the drop rate now is: this is the figure goal.maxBuriedPct is
+     scored on, and an instrument that disagrees with the scoreboard is worse
+     than no instrument. */
+  if(els.buried){
+    const Nz = noise();
+    const bp = Nz.buriedP * 100;
+    els.buried.textContent = bp.toFixed(2) + '%'
+      + (Nz.util > 1 ? `  (${Math.round(Nz.inflow)}/${Math.round(Nz.cap)} 件/分)` : '');
+    els.buried.className = bp > 0.5 ? 'red' : 'dark';
+  }
   updateVerdict(M);
   maybeFitRight();
 }
