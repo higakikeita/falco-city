@@ -173,6 +173,68 @@ when(clm, '版に関する主張の出典が INVARIANTS に解決する', m => {
 });
 
 /* ------------------------------------------------------------------ *
+ * 1b. 純データであること — F3
+ * ------------------------------------------------------------------ *
+ * GATE-FREEPLAY F3。ブラウザ版がモックになった以上（GATE §【2026-07-31 更新】)、
+ * **本番に運べるものだけが資産です。** 運べるのは因果モデルと INVARIANTS の主張、
+ * そしてデータ層とシナリオ —— ただし運べるのは *純データである限り* です。関数や
+ * undefined が1つ混ざった瞬間、Godot 側は「移植」ではなく「書き直し」になります。
+ *
+ * scenarios/schema.js が同じ性質を isPlainData() で守っています。8つの新規モジュール
+ * には同じ番人が居なかったので、ここに置きます。**F3 は誰の担当にもなっていなかった
+ * 唯一の F でした。**
+ */
+G('純データであること (F3)');
+
+/* 関数・undefined・NaN・exotic object が data の中に居ないこと。
+   場所を返す —— 「どこか」ではなく「どのキー」が分かる必要がある */
+function impurities(v, path, out = []){
+  if(v === null) return out;
+  const t = typeof v;
+  if(t === 'string' || t === 'boolean') return out;
+  if(t === 'number'){
+    if(!Number.isFinite(v)) out.push(`${path} = ${v}`);
+    return out;
+  }
+  if(t === 'function'){ out.push(`${path} は関数`); return out; }
+  if(t === 'undefined'){ out.push(`${path} は undefined`); return out; }
+  if(t === 'symbol' || t === 'bigint'){ out.push(`${path} は ${t}`); return out; }
+  if(Array.isArray(v)){ v.forEach((x, i) => impurities(x, `${path}[${i}]`, out)); return out; }
+  const proto = Object.getPrototypeOf(v);
+  if(proto !== Object.prototype && proto !== null){
+    out.push(`${path} は ${v.constructor?.name || '素でないオブジェクト'}`);
+    return out;
+  }
+  for(const [k, x] of Object.entries(v)) impurities(x, `${path}.${k}`, out);
+  return out;
+}
+
+const DATA_MODULES = ['archetypes','stages','versions','policies',
+                      'timeline','score','vulns','campaigns'];
+for(const name of DATA_MODULES){
+  const dep = need(name);
+  when(dep, `${name}.js の宣言が JSON を往復できる（F3）`, m => {
+    /* export された「データ」だけを見る。関数は API なので対象外 —— 見るのは
+       関数が *データの中に* 混ざっていないかどうか */
+    const data = Object.entries(m).filter(([, v]) =>
+      v !== null && typeof v === 'object');
+    assert(data.length > 0, `${name}.js がデータを1つも export していない`);
+    const bad = [];
+    for(const [key, value] of data){
+      bad.push(...impurities(value, key));
+      const once = JSON.stringify(value);
+      if(once === undefined){ bad.push(`${key} が JSON にできない`); continue; }
+      if(JSON.stringify(JSON.parse(once)) !== once) bad.push(`${key} が往復で変わる`);
+    }
+    assert(bad.length === 0, bad.slice(0, 6).join(' / ')
+      + (bad.length > 6 ? ` …他 ${bad.length-6} 件` : ''));
+    const keys = data.map(([k]) => k);
+    return `${keys.length} 宣言が往復で不変（${keys.slice(0, 4).join(' / ')}`
+         + `${keys.length > 4 ? ` …他 ${keys.length-4}` : ''}）`;
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * 2. 点の単調性 — 守れば増え、事故れば減る
  * ------------------------------------------------------------------ */
 G('点の単調性 (F1)');
