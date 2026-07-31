@@ -1,9 +1,39 @@
 /* MENU — the entrance.
  *
- * Opening the page used to drop you straight into a city with no statement of
- * what you were looking at. This module is the front door: a title screen that
- * says what the game is in one screen, a side pick (defence / offence), and —
- * for defence — the role pick that the campaign's role layer already models.
+ * Three screens, in this order:
+ *
+ *     ABOUT  ->  SIDE (陣営)  ->  ROLE (役割)  ->  the scenario
+ *
+ * ---------------------------------------------------------------- §about
+ * The front page used to be a wordmark and a pitch in numbers — "8 段の
+ * パイプライン、6 段の攻撃チェーン" — and it never said what you DO. Someone who
+ * has just bought this opens it and cannot answer "what is this?", which is the
+ * one question a front page exists for. Playing it takes 11-18 minutes on first
+ * sight; deciding whether to start takes one screen, and that screen was
+ * spending itself on identity instead.
+ *
+ * So the pitch became its own screen, and it answers four things in the order a
+ * new player needs them:
+ *
+ *   1. WHAT YOU ARE. You are the person the detection pipeline belongs to, and
+ *      the game hands you situations that happen on real estates.
+ *   2. WHAT YOUR HANDS ARE. Build, tune, ask another team. Three concrete verbs,
+ *      with the actual districts and the actual falco.yaml keys named — because
+ *      "what can I do" is answered by nouns, not by adjectives.
+ *   3. HOW YOU LOSE, and that there are TWO ways. Missing a step is the obvious
+ *      one. Drowning in alerts is the one nobody expects and the one that makes
+ *      "build everything and turn everything on" a losing move.
+ *   4. THAT THE CAUSALITY IS REAL. The numbers are illustrative and the
+ *      behaviour is not: buf_size_preset only fixes bursts, a cloud API call
+ *      cannot match a syscall rule. INVARIANTS.md is the authority.
+ *
+ * It is deliberately NOT a tutorial. Nothing here explains which button to
+ * press: the acceptance test is "does a reader know what to do next", and what
+ * to do next is press ゲームスタート.
+ *
+ * Every count comes from the model — SCENARIOS.length, BUILD_ORDER.length,
+ * the max wave count — so the pitch cannot outlive the content. The
+ * scenario count in particular: it went 6 -> 9 while this was being written.
  *
  * Everything here is self-contained on purpose. The markup, the styles and the
  * wiring are all built from this file, so `index.html` and `ui.js` stay almost
@@ -21,7 +51,8 @@
  *
  * Public API:
  *   initMenu()        build the overlay, wire it, then open or skip per prefs
- *   showTitle()       open at the title screen
+ *   showTitle()       open at the front page (the about screen)
+ *   showSides()       open at the side pick
  *   showRoles()       open at the role screen (defence already chosen)
  *   hideMenu()        close the overlay, leaving the app as-is
  *   menuPrefs()       read the persisted prefs, or null
@@ -30,10 +61,11 @@
  *   plotStyle(id)     'live' | 'next' | 'plot' — for the minimap to agree
  * Also exposed as `window.__menu` for driving from a test harness.
  */
-import { SIDES, ROLES, BUILD_ORDER, CHAIN, GAME, canBuild,
+import { SIDES, ROLES, BUILD_ORDER, GAME, canBuild,
          setSide, setRole, setUiMode, onCampaignChange,
          SCENARIOS, startScenario } from './campaign.js';
 import { byId } from './layout.js';
+import { wavesOf } from './scenarios/schema.js';
 import { hasSeen, markSeen, progressSummary, unlockedIds, isCleared,
          storageOk } from './save.js';
 
@@ -102,35 +134,85 @@ const CSS = `
 #menu .card{display:none;width:100%;max-width:912px;max-height:100%;
   overflow-y:auto;scrollbar-width:thin;
   background:var(--white);border:1px solid var(--grey-10);border-radius:18px;
-  box-shadow:0 18px 60px rgba(0,0,0,.10);padding:26px 34px 24px}
+  box-shadow:0 18px 60px rgba(0,0,0,.10);padding:20px 30px 18px}
 #menu .card.on{display:block}
 
 /* ---- shared bits ---- */
-#menu .brow{display:flex;align-items:center;gap:14px;padding-bottom:16px;
-  border-bottom:1px solid var(--grey-10);margin-bottom:20px}
+#menu .brow{display:flex;align-items:center;gap:14px;padding-bottom:12px;
+  border-bottom:1px solid var(--grey-10);margin-bottom:14px}
 #menu .brow svg{display:block;height:15px;width:auto;color:var(--black)}
 #menu .brow .bar{width:1px;height:20px;background:var(--grey-10)}
 #menu .brow .kick{font-family:var(--font-mono);font-size:10px;color:var(--grey-30);
   letter-spacing:.19em;text-transform:uppercase}
 #menu .brow .step{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-25);
   letter-spacing:.16em;text-transform:uppercase;margin-left:auto}
-#menu h1{font-weight:300;font-size:33px;line-height:1.24;letter-spacing:-.005em;
+#menu h1{font-weight:300;font-size:28px;line-height:1.26;letter-spacing:-.005em;
   text-wrap:balance}
 #menu h1 em{font-style:normal;font-weight:600;
   background:var(--lumin);padding:0 8px;border-radius:3px}
 #menu h2{font-weight:300;font-size:25px;line-height:1.3}
-#menu .lede{font-size:13px;line-height:1.8;color:var(--grey-50);margin-top:12px;
-  max-width:660px}
+#menu .lede{font-size:13px;line-height:1.78;color:var(--grey-50);margin-top:9px;
+  max-width:700px}
 #menu .lede b{color:var(--black);font-weight:600}
+#menu .lede b.nb{white-space:nowrap}
 #menu .lede code{font-family:var(--font-mono);font-size:12px;
   background:var(--grey-10);padding:1px 5px;border-radius:3px}
 
 /* ---- the three beats, so the loop is legible before you click ---- */
-#menu .beats{display:flex;align-items:center;gap:9px;margin-top:16px}
+#menu .beats{display:flex;align-items:center;gap:9px;margin-top:12px}
 #menu .beats span{font-family:var(--font-mono);font-size:10px;letter-spacing:.13em;
   text-transform:uppercase;background:var(--grey-10);color:var(--grey-50);
   padding:6px 12px;border-radius:7px;white-space:nowrap}
 #menu .beats i{font-style:normal;color:var(--grey-25);font-size:11px}
+
+/* ---- §about: the front page ------------------------------------------------
+   Two rows of three cells: what your hands are, then how you lose. Cells rather
+   than prose because "what can I do" is a list of nouns, and because three short
+   columns read in one pass while the same words as a paragraph do not.
+   Every value is an existing token. The whole card has to fit 1280x720 without
+   scrolling, which is what the sizes below are tuned to and the reason the
+   section labels are 9px strips instead of headings. */
+#menu .seclbl{font-family:var(--font-mono);font-size:9px;letter-spacing:.17em;
+  text-transform:uppercase;color:var(--grey-25);margin:11px 0 6px}
+#menu .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}
+#menu .cell{border:1px solid var(--grey-10);border-radius:12px;padding:9px 12px 9px;
+  display:flex;flex-direction:column;gap:4px;background:var(--white)}
+#menu .cell .ct{font-size:13px;font-weight:600;color:var(--black);line-height:1.3}
+#menu .cell .cb{font-size:11.5px;line-height:1.7;color:var(--grey-50)}
+#menu .cell .cb b{color:var(--black);font-weight:600}
+#menu .cell .cb code{font-family:var(--font-mono);font-size:10.5px;
+  background:var(--grey-10);padding:1px 4px;border-radius:3px}
+/* the enumerations — district names, falco.yaml keys. Present but not shouting:
+   they are there to answer "which ones", not to be read as prose. */
+#menu .cell .cb .dim{font-family:var(--font-mono);font-size:9.5px;line-height:1.65;
+  color:var(--grey-30);display:block;margin-top:3px}
+/* the consequence line, so each hand says what it buys and what it costs */
+#menu .cell .cf{margin-top:auto;padding-top:6px;border-top:1px solid var(--grey-10);
+  font-size:10.5px;line-height:1.55;color:var(--grey-40)}
+#menu .cell .cf b{color:var(--grey-60);font-weight:600}
+/* the two losing conditions are marked as such — a player who reads only the
+   headings still learns that turning everything on is one of the ways to lose */
+#menu .cell.lose{background:rgba(234,82,85,.055);border-color:rgba(234,82,85,.22)}
+#menu .cell.real{background:rgba(189,247,139,.16);border-color:rgba(92,154,46,.24)}
+
+#menu .facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+#menu .facts .f{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.05em;
+  color:var(--grey-40);background:var(--grey-10);padding:6px 11px;border-radius:7px}
+#menu .facts .f b{color:var(--black);font-weight:400}
+
+/* The primary action sits here, ABOVE the fold, not only in the foot. Now that
+   pages may be as tall as they need (GAME-DESIGN §5.5), this card is taller than
+   the viewport on purpose — and a start button that only exists at the bottom of
+   a scrolling card is a start button a first-time reader does not find. */
+#menu .cta{display:flex;align-items:center;gap:13px;margin-top:14px;padding-top:13px;
+  border-top:1px solid var(--grey-10)}
+#menu .cta .ctan{font-family:var(--font-mono);font-size:9.5px;color:var(--grey-25);
+  letter-spacing:.09em}
+/* an entrance that is not open yet. Same language as the offence card: the
+   reason is written on it rather than being greyed out into a mystery. */
+#menu .cell.shutcell{background:var(--grey-10);border-style:dashed;
+  border-color:var(--grey-20)}
+#menu .cell.shutcell .ct{color:var(--grey-40)}
 
 /* ---- §continue: the campaign you already have ----------------------------
    It rides on the beats row rather than getting one of its own. The title card
@@ -154,13 +236,17 @@ const CSS = `
   padding:8px 14px;border-radius:8px;cursor:pointer;transition:.16s;white-space:nowrap}
 #menu .beats .resume:hover{background:var(--grey-60)}
 
-/* the environments that refuse localStorage. A notice, not an error: save.js
-   keeps the record in memory, so the only thing lost is outliving the tab. */
-#menu .foot .nosave{font-size:11.5px;line-height:1.7;color:var(--grey-50);
-  background:rgba(255,169,64,.13);border-left:2px solid var(--orange);
-  border-radius:7px;padding:8px 11px;flex:1 1 300px;min-width:240px}
+/* The environments that refuse localStorage. A notice, not an error: save.js
+   keeps the record in memory, so the only thing lost is outliving the tab.
+   It takes the .note slot rather than a row of its own — the two are the same
+   kind of small print, and this one matters more, so renderProgress() swaps
+   them. As its own flex row it wrapped the foot and pushed the card past 720p
+   in the one case where both it and the progress strip are showing. */
+#menu .foot .nosave{font-family:var(--font-mono);font-size:9.5px;line-height:1.65;
+  letter-spacing:.04em;color:#8A5A16;border-left:2px solid var(--orange);
+  padding-left:9px;margin-left:auto;text-align:right;flex:0 1 auto;max-width:300px}
 #menu .foot .nosave[hidden]{display:none}
-#menu .foot .nosave b{color:var(--grey-70);font-weight:600}
+#menu .foot .nosave b{color:var(--grey-70);font-weight:400}
 
 /* ---- side pick ---- */
 #menu .sides{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px}
@@ -206,8 +292,8 @@ const CSS = `
 #menu .side .why b{color:var(--grey-70);font-weight:600}
 
 /* ---- footer: explore stays reachable ---- */
-#menu .foot{display:flex;align-items:center;gap:14px;margin-top:20px;
-  padding-top:16px;border-top:1px solid var(--grey-10);flex-wrap:wrap}
+#menu .foot{display:flex;align-items:center;gap:12px;margin-top:14px;
+  padding-top:12px;border-top:1px solid var(--grey-10);flex-wrap:wrap}
 #menu .ghost{font-family:var(--font-mono);font-size:10px;letter-spacing:.11em;
   text-transform:uppercase;border:1px solid var(--grey-20);background:var(--white);
   color:var(--grey-40);padding:9px 14px;border-radius:9px;cursor:pointer;
@@ -294,19 +380,41 @@ function brandRow(kicker, stepLabel){
 const sideDefence = SIDES.find(sd => sd.id === 'defense');
 const sideOffence = SIDES.find(sd => sd.id === 'offense');
 
-/* the two numbers below come from the model, so the pitch cannot drift from it */
+/* EVERY NUMBER ON THE FRONT PAGE COMES FROM HERE.
+   Hard-coding any of them makes the pitch a lie the moment the content lane adds
+   a scenario or the rules lane adds a stage — which is not hypothetical: the
+   scenario count went 6 -> 9 during this session. */
 const STAGES = BUILD_ORDER.length;
-const STEPS  = CHAIN.length;
+const CASES  = SCENARIOS.length;
+const WAVES  = SCENARIOS.length
+  ? Math.max(...SCENARIOS.map(s => (wavesOf(s) || []).length))
+  : 0;
+/* the districts you build, named — "what can I do" is answered with nouns */
+const STAGE_NAMES = BUILD_ORDER.map(id => byId(id).jp).join(' · ');
+/* the first scenario, so the page can say what the next screen leads to */
+const FIRST = SCENARIOS[0] || null;
 
-function titleHtml(){
-  return brandRow('runtime security city', 'step 1 / 2 · 陣営')
-  + `<h1>syscall からアラートまで、<em>検知の街</em>を建てる。</h1>
-     <p class="lede">空き地に <b>${STAGES} 段</b>のパイプラインを建て、
-       <b>${STEPS} 段</b>の攻撃チェーンを迎え撃つゲームです。
-       建てていない段の攻撃は、運が悪いのではなく<b>原理として</b>見逃します。
-       見逃した行には、必ずその理由が付きます。</p>
-     <div class="beats"><span>建てる</span><i>→</i><span>迎え撃つ</span><i>→</i>
-       <span>見逃した理由を直す</span>
+/* The falco.yaml keys are facts, not counts, so they are written out — but they
+   are written out ONCE, here, because three different spellings of
+   cpus_for_each_buffer (one of which was not a real key) is exactly the drift
+   BOARD #9 was about. This is the spelling index.html's TUNING label uses. */
+const LEVERS = [
+  'base_syscalls',
+  'buf_size_preset',
+  'engine.&lt;engine&gt;.cpus_for_each_buffer',
+  '出力の同期性（slow output）',
+  'syscall_event_drops.actions'
+];
+
+function aboutHtml(){
+  return brandRow('runtime security city', 'about')
+  + `<h1>あなたは検知を預かり、<em>時間の流れに逆らって</em>守り続ける。</h1>
+     <p class="lede">環境を選び、守り方を決め、テストして本番に出す。そこから
+       <b>時間が進み始めます</b> — 攻撃は新しくなり、ミドルウェアに脆弱性が見つかり、
+       使っているエージェントは古くなる。<b>止まっていることも、進むことも、
+       無料ではありません。</b></p>
+     <div class="beats"><span>設定する</span><i>→</i><span>本番に出す</span><i>→</i>
+       <span>時間に耐える</span>
        <!-- filled by renderProgress(); hidden until there is progress to show -->
        <div class="prog" id="mProg" hidden>
          <div class="dots" id="mDots"></div>
@@ -314,12 +422,139 @@ function titleHtml(){
          <button class="resume" id="mResume">続きから</button>
        </div></div>
 
+     <div class="seclbl">負け方は3つある</div>
+     <div class="grid3">
+       <div class="cell lose">
+         <div class="ct">見逃す</div>
+         <div class="cb">リングバッファで落ちる / <code>base_syscalls</code> で削った盲点 /
+           そもそも持っていないルール / バージョンを上げて <code>&lt;NA&gt;</code> になった
+           フィールド / 別ソースなので<b>原理的に見えない</b></div>
+       </div>
+       <div class="cell lose">
+         <div class="ct">鳴りすぎて埋もれる</div>
+         <div class="cb">全部建てて全部鳴らすと、<b>本物のアラートが SOC のキューで埋まる</b>。
+           検知していたのに見失うので、見逃しと同じか<b>それより重い</b></div>
+       </div>
+       <div class="cell lose">
+         <div class="ct">点が尽きる</div>
+         <div class="cb">手を打つには点を払います。点は<b>守れている時間</b>にだけ入るので、
+           守れていないほど打つ手が無くなる。<b>溜めて何もしなければ時間に追い抜かれます</b></div>
+       </div>
+     </div>
+     <div class="facts">
+       <span class="f"><b>建てただけでは1点も入りません</b> — 点は「守れた時間」に付く</span>
+     </div>
+
+     <div class="cta">
+       <button class="start" id="mStartGame">ゲームスタート →</button>
+       <span class="ctan">この下は、始める前に知っておくと早い話です</span>
+     </div>
+
+     <div class="seclbl">あなたが持つ手 — どれも無料ではない</div>
+     <div class="grid3">
+       <div class="cell">
+         <div class="ct">建てる</div>
+         <div class="cb"><b>${STAGES} 段</b>の地区を依存順に建てます。<br>
+           <span class="dim">${STAGE_NAMES}</span></div>
+         <div class="cf">建てていない段は、運ではなく<b>原理として</b>見逃す</div>
+       </div>
+       <div class="cell">
+         <div class="ct">チューニングする</div>
+         <div class="cb"><code>falco.yaml</code> のレバー。<b>カーネル層</b>の関門です。<br>
+           <span class="dim">${LEVERS.join(' · ')}</span></div>
+         <div class="cf">絞れば落ちないが<b>計測できない盲点</b>ができる</div>
+       </div>
+       <div class="cell">
+         <div class="ct">ポリシーを変える</div>
+         <div class="cb">ルールセットの成熟度・priority しきい値・応答アクション。
+           <b>検知層</b>の関門です。</div>
+         <div class="cf">広げれば埋もれ、絞れば見逃す。<b>カーネル層とは独立</b></div>
+       </div>
+       <div class="cell">
+         <div class="ct">他チームに依頼する</div>
+         <div class="cb">役を選ぶと、<b>自分では触れないレバーと地区</b>ができます。
+           そこは担当への依頼になります。</div>
+         <div class="cf">依頼した<b>回数がそのまま点のコスト</b>になる</div>
+       </div>
+       <div class="cell">
+         <div class="ct">バージョンを上げる</div>
+         <div class="cb">飛べません。段を踏んで上げます。新しいルールは<b>新しい下限</b>を
+           要求し、上げると<b>壊れるもの</b>もあります。</div>
+         <div class="cf">上げている間は<b>検知が落ちる</b>。上げないと詰む</div>
+       </div>
+       <div class="cell">
+         <div class="ct">脆弱性にパッチを当てる</div>
+         <div class="cb">時間とともに積み上がります。<b>全部は塞げません。</b>
+           塞がなくても<b>ランタイム検知で受けられる</b> — それがこの層の存在理由です。</div>
+         <div class="cf">停止時間のあいだ<b>加算が止まる</b></div>
+       </div>
+     </div>
+
+     <div class="seclbl">時間が進むと何が起きるか</div>
+     <div class="grid3">
+       <div class="cell">
+         <div class="ct">攻撃が新しくなる</div>
+         <div class="cb">組み合わせは自動で組まれます。ランダムではなく、
+           <b>いまの構成で通る道</b>から。盲点があれば<b>そこを突きます</b></div>
+       </div>
+       <div class="cell">
+         <div class="ct">脆弱性が積み上がる</div>
+         <div class="cb">業種で決まったミドルウェアに見つかります。放置は
+           <b>期間に比例して</b>痛みます</div>
+       </div>
+       <div class="cell real">
+         <div class="ct">因果は本物</div>
+         <div class="cb">数字は代表値ですが、挙動は Falco / Sysdig の実際の仕様に
+           合わせています。<code>buf_size_preset</code> はバーストにだけ効き、クラウド API は
+           別ソースなので syscall ルールに<b>絶対マッチしません</b>。バージョン履歴も実物です
+           — Falco <b>0.37</b> で内蔵 k8s クライアントが外れ、古い <code>k8s.*</code> は
+           <code>&lt;NA&gt;</code> を返すようになります</div>
+       </div>
+     </div>
+
+     <div class="seclbl">いま開いている入口</div>
+     <div class="grid3">
+       <div class="cell">
+         <div class="ct">練習 — 他人が置いていった環境を診断する</div>
+         <div class="cb"><b>${CASES} 本</b>の状況が登録されています。症状を見て、原因を当てて、
+           直す。<b>いま遊べるのはこちらです。</b><br>
+           <span class="dim">最初は「${FIRST ? FIRST.title : ''}」 — まず街の構造を通す回</span></div>
+         <div class="cf">攻撃は <b>${WAVES} 波</b>で来る — 波の間に建て直せる</div>
+       </div>
+       <div class="cell shutcell">
+         <div class="ct">本番運用 — 時間に耐える</div>
+         <div class="cb">業種 → 環境 → 守り方 → ポリシー → テスト → 本番。
+           上に書いた時間の進行はこちらです。</div>
+         <div class="cf"><b>制作中。</b>できたところから開きます</div>
+       </div>
+       <div class="cell shutcell">
+         <div class="ct">攻撃側</div>
+         <div class="cb">${sideOffence.brief}</div>
+         <div class="cf"><b>作りません。</b>攻撃は自動生成が主で、人が操作する必要がない</div>
+       </div>
+     </div>
+
+     <div class="foot">
+       <button class="start" id="mStartGame2">ゲームスタート →</button>
+       <button class="ghost" id="mExplore">Explore — 都市を歩いて仕組みを読む</button>
+       <button class="ghost" id="mSkipNext">次回から説明を出さない</button>
+       <div class="nosave" id="mNoSave" hidden>この環境では<b>保存できません</b>（プライベートモード等）<br>遊べます — 進行はこのタブを閉じるまで</div>
+       <span class="note" id="mNote">1280×720 以上 · 日本語</span>
+     </div>`;
+}
+
+function sidesHtml(){
+  return brandRow('runtime security city', 'step 1 / 2 · 陣営')
+  + `<h2>どちら側で入りますか。</h2>
+     <p class="lede">いま遊べるのは<b>守備側</b>です。攻撃は Auto で流れるので、
+       あなたは<b>受け止める側の設計</b>だけを考えます。</p>
+
      <div class="sides">
        <button class="side" id="mSideDef">
          <div class="top"><span class="nm">${sideDefence.jp}</span>
            <span class="en">defence</span></div>
          <div class="txt">${sideDefence.brief}</div>
-         <div class="meta">役割を選んで開始<br>基盤 / SRE / 検知 / SOC / 全役</div>
+         <div class="meta">役割を選んで開始<br>${ROLES.map(r => r.chip).join(' / ')} / 全役</div>
          <div class="meta">建てる段（点線は未建設）</div>
          <div class="plan">${BUILD_ORDER.map(id => `<i>${byId(id).n}</i>`).join('')}</div>
          <div class="go">守備側で始める →</div>
@@ -338,10 +573,8 @@ function titleHtml(){
      </div>
 
      <div class="foot">
-       <button class="ghost" id="mExplore">Explore — 都市を歩いて仕組みを読む</button>
-       <button class="ghost" id="mSkipNext">次回からタイトルを出さない</button>
-       <div class="nosave" id="mNoSave" hidden>この環境では<b>進行を保存できません</b>（プライベートモードなど）。クリアと解放はこのタブを開いているあいだ有効なので、<b>遊ぶことはできます</b>。失われるのはタブを閉じたときだけです。</div>
-       <span class="note">1280×720 以上 · 日本語 · 攻撃側は未実装</span>
+       <button class="ghost" id="mToAbout">← 説明に戻る</button>
+       <span class="note">攻撃側は未実装 · ${CASES} 状況すべて守備側</span>
      </div>`;
 }
 
@@ -375,28 +608,35 @@ function rolesHtml(){
      </div>`;
 }
 
-const cardTitle = document.createElement('div');
-cardTitle.className = 'card';
-cardTitle.id = 'menuTitle';
-
-const cardRoles = document.createElement('div');
-cardRoles.className = 'card';
-cardRoles.id = 'menuRoles';
+const mk = id => { const d = document.createElement('div'); d.className = 'card'; d.id = id; return d; };
+const cardAbout = mk('menuAbout');
+const cardSides = mk('menuSides');
+const cardRoles = mk('menuRoles');
 
 /* '' means 全役 — GAME.role is null there, and dataset values are strings */
 let picked = '';
 
 
-/* ---------------------------------------------------------------- screens */
+/* ---------------------------------------------------------------- screens
+   about -> sides -> roles, and every step has a way back one screen. `title` is
+   kept as an alias for `about` because #uiModeSeg's ↩ button and window.__menu
+   both call showTitle(), and the front page IS the title now. */
+const CARDS = {about:cardAbout, sides:cardSides, roles:cardRoles};
+
 function openCard(which){
-  cardTitle.classList.toggle('on', which === 'title');
-  cardRoles.classList.toggle('on', which === 'roles');
+  for(const [name, card] of Object.entries(CARDS))
+    card.classList.toggle('on', name === which);
   el.classList.add('show');
-  /* the title is reachable at any time from ↩ タイトル, so the progress on it is
-     redrawn on every open rather than once at build time */
-  if(which === 'title') renderProgress();
+  /* the about card is taller than the viewport on purpose, so every open starts
+     at the top — otherwise coming back from ↩ タイトル drops you mid-explanation */
+  const card = CARDS[which];
+  if(card) card.scrollTop = 0;
+  /* the front page is reachable at any time from ↩ タイトル, so the progress on
+     it is redrawn on every open rather than once at build time */
+  if(which === 'about') renderProgress();
 }
-function showTitle(){ openCard('title'); }
+function showTitle(){ openCard('about'); }
+function showSides(){ openCard('sides'); }
 function showRoles(){ openCard('roles'); }
 function hideMenu(){ el.classList.remove('show'); }
 
@@ -418,10 +658,15 @@ function resumeId(){
 }
 
 function renderProgress(){
-  const nosave = cardTitle.querySelector('#mNoSave');
-  if(nosave) nosave.hidden = storageOk();
+  /* the notice and the spec note share one slot: when progress cannot be saved,
+     that is the more useful piece of small print */
+  const nosave = cardAbout.querySelector('#mNoSave');
+  const note   = cardAbout.querySelector('#mNote');
+  const ok = storageOk();
+  if(nosave) nosave.hidden = ok;
+  if(note)   note.hidden = !ok;
 
-  const prog = cardTitle.querySelector('#mProg');
+  const prog = cardAbout.querySelector('#mProg');
   if(!prog) return;
   const ids = scenarioOrder();
   const p = progressSummary(ids);
@@ -530,21 +775,27 @@ function initMenu(){
   style.textContent = CSS;
   document.head.appendChild(style);
 
-  cardTitle.innerHTML = titleHtml();
+  cardAbout.innerHTML = aboutHtml();
+  cardSides.innerHTML = sidesHtml();
   cardRoles.innerHTML = rolesHtml();
-  el.appendChild(cardTitle);
+  el.appendChild(cardAbout);
+  el.appendChild(cardSides);
   el.appendChild(cardRoles);
   document.body.appendChild(el);
 
-  cardTitle.querySelector('#mSideDef').onclick = showRoles;
-  cardTitle.querySelector('#mExplore').onclick = startExplore;
-  cardTitle.querySelector('#mResume').onclick = resumeCampaign;
-  cardTitle.querySelector('#mSkipNext').onclick = ev => {
+  /* about -> sides -> roles, with a way back at every step */
+  cardAbout.querySelector('#mStartGame').onclick = showSides;
+  cardAbout.querySelector('#mStartGame2').onclick = showSides;
+  cardAbout.querySelector('#mExplore').onclick = startExplore;
+  cardAbout.querySelector('#mResume').onclick = resumeCampaign;
+  cardAbout.querySelector('#mSkipNext').onclick = ev => {
     markSeen('title');
     ev.currentTarget.textContent = '次回はスキップします';
     ev.currentTarget.disabled = true;
   };
-  cardRoles.querySelector('#mBack').onclick = showTitle;
+  cardSides.querySelector('#mSideDef').onclick = showRoles;
+  cardSides.querySelector('#mToAbout').onclick = showTitle;
+  cardRoles.querySelector('#mBack').onclick = showSides;
   cardRoles.querySelector('#mStart').onclick = startDefence;
   cardRoles.querySelectorAll('.role').forEach(btn => btn.onclick = () => {
     picked = btn.dataset.role;
@@ -598,7 +849,8 @@ function initMenu(){
   }, 0);
 }
 
-window.__menu = {initMenu, showTitle, showRoles, hideMenu, menuPrefs, forgetMenu,
+window.__menu = {initMenu, showTitle, showAbout:showTitle, showSides, showRoles,
+                 hideMenu, menuPrefs, forgetMenu,
                  pick(id){ picked = id === null ? '' : id; markRoles(); },
                  startDefence, startExplore, resumeCampaign, resumeId,
                  renderProgress, plotStyle};
@@ -606,6 +858,7 @@ window.__menu = {initMenu, showTitle, showRoles, hideMenu, menuPrefs, forgetMenu
 export {
   initMenu,
   showTitle,
+  showSides,
   showRoles,
   hideMenu,
   menuPrefs,
