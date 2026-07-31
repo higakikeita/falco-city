@@ -2,8 +2,9 @@
 import * as THREE from 'three';
 import { C } from './palette.js';
 import { DISTRICTS } from './layout.js';
-import { box, edgeMat, put } from './mesh.js';
-import { world } from './scene.js';
+import { GAME } from './state.js';
+import { box, chevron, groundText } from './mesh.js';
+import { world, onPreRender } from './scene.js';
 import { BUILDERS } from './districts.build.js';
 
 
@@ -62,7 +63,214 @@ DISTRICTS.forEach(d=>{
   };
 });
 
+
+/* ============================================================
+   5b. surveyed plots — what an unbuilt stage looks like on the GROUND
+   ------------------------------------------------------------
+   Campaign starts on bare ground, and `src/menu.js` §plots already answers
+   half of the problem this created: an unbuilt stage no longer disappears from
+   the overlay, it draws a dashed numbered label. But the label floats, and the
+   ground beneath it is untouched grid — so the opening frame still reads as
+   "a label hanging in empty space" rather than "a site waiting to be built".
+
+   This is the ground half, and it lives here because it needs the layout's real
+   rectangle: d.x0..d.x1 × d.z0..d.z1 are the very numbers the building will
+   occupy, so a plot cannot drift from the district that replaces it, at any
+   node count.
+
+   Three states, named and coloured exactly as menu.js names and colours them,
+   so the label and the ground under it speak one language:
+
+     plot   dependencies unmet   grey-30 dashed on the bare ground, quiet
+     next   buildable right now  Lumin fill, black dashed border, breathing
+     live   built                no plot at all — the district itself is there
+
+   Which state a plot is in comes from the campaign, which owns that question —
+   this file holds no opinion about the build graph.
+   ============================================================ */
+/* Each state paints three things: a boundary BAND, an inset PAD, and a dashed
+   survey line on top. The band exists because a 1px dashed line is gone by the
+   middle distance and the home shot is where this has to work — a 1.4-unit
+   strip of grey is still a boundary at 200 units away. Colours are menu.js's:
+   `.tag.plot` is grey-30 dashed, `.tag.next` is Lumin inside black. */
+const PLOT_STYLE = {
+  plot: {band:C.g30,   bandOp:0.36, fill:C.g20,   fillOp:0.19,
+         edge:C.g30,   edgeOp:0.95, stake:C.g40, num:0.62},
+  next: {band:C.black, bandOp:0.26, fill:C.lumin, fillOp:0.30,
+         edge:C.black, edgeOp:0.75, stake:C.g60, num:0.90}
+};
+const DASH = 3.0, GAP = 2.2, BAND = 1.4;
+
+/* a dashed rectangle, one LineSegments so the dash pattern restarts per edge */
+function dashedRect(w, dp){
+  const hx = w/2, hz = dp/2, y = 0;
+  const c = [[-hx,-hz],[hx,-hz],[hx,hz],[-hx,hz]];
+  const pts = [];
+  for(let i=0;i<4;i++){
+    const a = c[i], b = c[(i+1)%4];
+    pts.push(a[0], y, a[1], b[0], y, b[1]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const m = new THREE.LineDashedMaterial({color:C.g30, transparent:true, opacity:0.8,
+                                          dashSize:DASH, gapSize:GAP});
+  const l = new THREE.LineSegments(g, m);
+  l.computeLineDistances();
+  return l;
+}
+
+/* four corner stakes — the difference between "a dashed box" and "a surveyed
+   lot". Solid, not dashed, because a stake is a real thing that is really there. */
+function cornerStakes(w, dp){
+  const hx = w/2, hz = dp/2, t = Math.min(4.2, Math.min(w, dp)*0.16);
+  const pts = [];
+  for(const sx of [-1,1]) for(const sz of [-1,1]){
+    const x = sx*hx, z = sz*hz;
+    pts.push(x, 0, z,  x - sx*t, 0, z);
+    pts.push(x, 0, z,  x, 0, z - sz*t);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  return new THREE.LineSegments(g, new THREE.LineBasicMaterial(
+    {color:C.g25, transparent:true, opacity:0.9}));
+}
+
+const plots = [];
+DISTRICTS.forEach(d=>{
+  const cx = (d.x0+d.x1)/2, cz = (d.z0+d.z1)/2;
+  const w = d.x1-d.x0, dp = d.z1-d.z0;
+  const grp = new THREE.Group();
+  grp.position.set(cx, (d.y ?? 0) + 0.05, cz);
+  grp.visible = false;
+
+  const band = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, dp),
+    new THREE.MeshBasicMaterial({color:C.g30, transparent:true, opacity:0.30, depthWrite:false})
+  );
+  band.rotation.x = -Math.PI/2; grp.add(band);
+
+  const fill = new THREE.Mesh(
+    new THREE.PlaneGeometry(w - BAND*2, dp - BAND*2),
+    new THREE.MeshBasicMaterial({color:C.g20, transparent:true, opacity:0.16, depthWrite:false})
+  );
+  fill.rotation.x = -Math.PI/2; fill.position.y = 0.006; grp.add(fill);
+
+  const dash = dashedRect(w, dp);   dash.position.y = 0.012; grp.add(dash);
+  const stakes = cornerStakes(w, dp); stakes.position.y = 0.018; grp.add(stakes);
+
+  /* The stage number, painted on the ground the way a plot number is painted on
+     a site. Same number menu.js prints in the floating label's .pn span, and
+     large enough to read from the home shot, where the label above it may be one
+     of nine competing for the same patch of screen. */
+  const num = groundText(d.n, -w/2 + 6.0, dp/2 - 7.0, 8.0,
+                         {color:'#626466', mono:true, opacity:0.55, y:0.026});
+  grp.add(num);
+
+  /* Only the buildable lot gets these: the flow motif, inside the boundary,
+     pointing the way the pipeline wants to continue. Hidden in the `plot` state,
+     so "you can build here" and "not yet" differ in shape and not only in
+     colour. */
+  const arrows = new THREE.Group();
+  for(let i=0;i<3;i++){
+    const ch = chevron(-w/2 + 3.2 + i*3.0, -dp/2 + 5.0, 2.1, C.black, 0.42 - i*0.09);
+    ch.position.y = 0.03;
+    arrows.add(ch);
+  }
+  grp.add(arrows);
+
+  world.add(grp);
+  plots.push({d, grp, band, fill, dash, stakes, num, arrows, state:'live', t:0, hand:-1, numOp:0.62});
+});
+
+/* Whether a stage can be built right now is campaign.js's question, and
+   campaign.js already imports districtObjs from this file. Reaching for it with
+   a static import would close that loop and make module init order load-bearing
+   for four other lanes' files, so it is picked up asynchronously: the promise
+   settles a microtask after main.js's static graph is done, by which point
+   campaign.js is fully evaluated. Until then every plot reads as `plot`, which
+   is the correct answer for a city nobody has started building. */
+let canBuild = null;
+import('./campaign.js').then(m => { canBuild = m.canBuild; }).catch(()=>{});
+
+function updatePlots(){
+  for(const p of plots){
+    const id = p.d.id;
+    const want = (!GAME.on || GAME.built.has(id)) ? 'live'
+               : (canBuild && canBuild(id)) ? 'next' : 'plot';
+    if(want === p.state) continue;
+    /* built: hand the ground over to the building with a short flash, so the
+       eye reads a replacement instead of a pop-in */
+    if(want === 'live' && p.state !== 'live'){ p.hand = 0; p.state = want; continue; }
+    p.state = want;
+    p.hand = -1;
+    const st = PLOT_STYLE[want];
+    p.dash.material.color.setHex(st.edge);
+    p.dash.material.opacity = st.edgeOp;
+    p.band.material.color.setHex(st.band);
+    p.band.material.opacity = st.bandOp;
+    p.fill.material.color.setHex(st.fill);
+    p.stakes.material.color.setHex(st.stake);
+    p.numOp = st.num;
+    p.num.material.opacity = st.num;
+    p.arrows.visible = want === 'next';
+    p.grp.visible = true;
+    p.t = 0;                                  // replay the arrival
+  }
+}
+
+/* The arrival animation matches menu.js's `plotin` keyframes (0.85s, overshoot
+   to 1.06) on purpose: the label and the lot land together. */
+const ARRIVE = 0.85;
+onPreRender(dt=>{
+  /* nine districts and a Set lookup each: cheaper than plumbing an event, and
+     it cannot go stale however the campaign changes its mind */
+  updatePlots();
+  for(const p of plots){
+    /* handover flash: the lot brightens, swells and goes */
+    if(p.hand >= 0){
+      p.hand += dt;
+      const k = Math.min(1, p.hand/0.5);
+      p.grp.visible = k < 1;
+      p.grp.scale.setScalar(1 + k*0.12);
+      p.fill.material.color.setHex(C.lumin);
+      p.fill.material.opacity = 0.40*(1-k);
+      p.band.material.opacity = 0.30*(1-k);
+      p.dash.material.opacity = 0.6*(1-k);
+      p.stakes.material.opacity = 0.9*(1-k);
+      p.num.material.opacity = (p.numOp ?? 0.55)*(1-k);
+      if(k >= 1){ p.hand = -1; p.grp.scale.setScalar(1); p.arrows.visible = false; }
+      continue;
+    }
+    if(!p.grp.visible) continue;
+    const st = PLOT_STYLE[p.state];
+    if(!st) continue;
+    if(p.t < ARRIVE){
+      p.t += dt;
+      const k = Math.min(1, p.t/ARRIVE);
+      /* 0 → 0.55, overshoot 1.06 at 0.6, settle at 1 */
+      const s = k < 0.6 ? 0.55 + (1.06-0.55)*(k/0.6) : 1.06 - 0.06*((k-0.6)/0.4);
+      p.grp.scale.setScalar(s);
+      p.num.material.opacity = st.num*k;
+      p.stakes.material.opacity = 0.9*k;
+    }else if(p.grp.scale.x !== 1){
+      p.grp.scale.setScalar(1);
+    }
+    /* the buildable lot breathes, on the same 2s beat as .tag.next's pulse */
+    if(p.state === 'next'){
+      const ph = 0.5 + 0.5*Math.sin(performance.now()/1000 * Math.PI);
+      p.fill.material.opacity = 0.22 + 0.16*ph;
+      p.dash.material.opacity = 0.48 + 0.27*ph;
+      p.band.material.opacity = 0.18 + 0.14*ph;
+    }else{
+      p.fill.material.opacity = st.fillOp;
+      p.dash.material.opacity = st.edgeOp;
+      p.band.material.opacity = st.bandOp;
+    }
+  }
+});
+
 export {
   districtObjs,
-  hitTargets
+  hitTargets,
+  plots
 };

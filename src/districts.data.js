@@ -251,8 +251,32 @@ const nodeOverride = (() => {
 const nodeCount = t => t.shape === 'nodes' ? (nodeOverride ?? t.nodes) : t.nodes;
 const MAX_NODES = Math.max(...TOPOLOGIES.map(nodeCount));
 const byTopologyId = id => TOPOLOGIES.find(t => t.id === id);
-/* how many pads a cluster actually has — captions need it before compose runs */
-const CLUSTER_NODES = nodeCount(byTopologyId('cluster'));
+
+/* How many pads a cluster actually has. Captions need it before compose runs,
+   and it is a `let` on purpose: a scenario is allowed to declare its own node
+   count (scenarios/schema.js §env.nodes), and until now that number reached the
+   noise model through S.nodes and never reached the ground — the city drew the
+   topology's default three whatever the scenario said. `nodes-are-not-buffers`
+   teaches "six nodes, and still one ring buffer each"; with three pads on screen
+   it teaches nothing.
+
+   So this is the single place the count lives, districts.build.js §applyNodes
+   redraws the cluster from it, and controls.js's own write-back of S.nodes now
+   assigns the value that is already true instead of overwriting it.
+
+   `?nodes=N` still wins outright, so the layout stays checkable from the URL.
+
+   What does NOT move is MAX_NODES, and therefore the workloads district's
+   declared depth: the layout engine runs once at module load, long before any
+   scenario is chosen, so the rectangle cannot follow. applyNodes() packs the
+   pads into the rectangle it was given instead. */
+let CLUSTER_NODES = nodeCount(byTopologyId('cluster'));
+function setClusterNodes(n){
+  if(nodeOverride != null) return;                   // the URL override is deliberate
+  if(!Number.isFinite(n)) return;
+  CLUSTER_NODES = Math.max(1, Math.min(NODE_MAX, Math.round(n)));
+  return CLUSTER_NODES;
+}
 
 
 /* ============================================================
@@ -745,6 +769,7 @@ export {
   byTopologyId,
   nodeCount,
   CLUSTER_NODES,
+  setClusterNodes,
   CPU_MAX,
   NODE_CPUS,
   nodeCpus,
