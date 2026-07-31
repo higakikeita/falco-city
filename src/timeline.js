@@ -67,38 +67,84 @@ const HORIZON_DAYS = 180;
 const MS_DAY = 86400000;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const isoOf = v => String(v == null ? '' : v).slice(0, 10);
+/* ---------------------------------------------------------------- 全域性
+   **このモジュールは throw しません。** 答えか、空の答えを返します。
+ *
+ * 契約（CONTRACT-datalayer.md §1）が「壊れた入力は**エラー値**で返す。例外ではない」
+ * と決めているので、そうします。ここで危ないのは日付で、`new Date(NaN).toISOString()`
+ * は **RangeError** を投げます。`dateAtTick(null)` や `addDays()` がそれを踏んでいました
+ * （8ファイルを fuzz して 29 箇所）。
+ *
+ * `str()` は Symbol も吸収します（`String(Symbol)` は throw する）。 */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
+const isoOf = v => str(v).slice(0, 10);
 const isIso = v => ISO_RE.test(isoOf(v)) && Number.isFinite(Date.parse(isoOf(v)+'T00:00:00Z'));
 /* UTC の日数に落とす。ここだけが Date を触る場所で、データには出ていきません。 */
-const dayNo = v => Math.floor(Date.parse(isoOf(v)+'T00:00:00Z') / MS_DAY);
-const dayIso = n => new Date(Math.round(n) * MS_DAY).toISOString().slice(0, 10);
-const addDays = (v, n) => dayIso(dayNo(v) + Math.round(n));
-/* from から to までの日数。負なら to が過去。 */
-const daysBetween = (from, to) => dayNo(to) - dayNo(from);
+/* 解析できない日付は NaN を返し、**下流がそれを見て空を返します**。
+   ここで既定値に化けさせると、間違った日付が正しい日付として通ってしまいます。 */
+const dayNo = v => {
+  const t = Date.parse(isoOf(v)+'T00:00:00Z');
+  return Number.isFinite(t) ? Math.floor(t / MS_DAY) : NaN;
+};
+/* NaN と範囲外は `null`。`new Date(NaN).toISOString()` は RangeError を投げるので、
+   ここが全域性の要です（fuzz が踏んだのはここ）。 */
+const dayIso = n => {
+  if(!Number.isFinite(n)) return null;
+  const ms = Math.round(n) * MS_DAY;
+  if(!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return null;
+  try { return new Date(ms).toISOString().slice(0, 10); } catch { return null; }
+};
+const addDays = (v, n) => dayIso(dayNo(v) + Math.round(num(n)));
+/* from から to までの日数。負なら to が過去。解析できなければ 0（距離が無い）。 */
+const daysBetween = (from, to) => {
+  const d = dayNo(to) - dayNo(from);
+  return Number.isFinite(d) ? d : 0;
+};
 
 function newClock(over){
-  const src = {...TIME_DEFAULTS, ...(over || {})};
+  const src = {...TIME_DEFAULTS, ...obj(over)};
   const start = isIso(src.start) ? isoOf(src.start) : TIME_DEFAULTS.start;
   return {
     start,
-    daysPerTick: Math.max(1, Math.round(src.daysPerTick) || TIME_DEFAULTS.daysPerTick),
-    tick: Math.max(0, Math.round(src.tick) || 0)
+    daysPerTick: Math.max(1, Math.round(num(src.daysPerTick)) || TIME_DEFAULTS.daysPerTick),
+    tick: Math.max(0, Math.round(num(src.tick)) || 0)
   };
 }
 
-const dateAtTick = (clock, tick) =>
-  addDays(clock.start, clock.daysPerTick * Math.max(0, Math.round(tick)));
-const clockDate = clock => dateAtTick(clock, clock.tick);
+/* 時計が壊れていても既定の時計として答えます（`null` を返すと呼ぶ側が全部
+   分岐することになり、画面が日付を出せなくなる）。 */
+const safeClock = c => {
+  const o = obj(c);
+  return isIso(o.start) && Number.isFinite(o.daysPerTick) && Number.isFinite(o.tick)
+    ? o : newClock(o);
+};
+const dateAtTick = (clockIn, tick) => {
+  const clock = safeClock(clockIn);
+  return addDays(clock.start, clock.daysPerTick * Math.max(0, Math.round(num(tick))));
+};
+const clockDate = clockIn => {
+  const clock = safeClock(clockIn);
+  return dateAtTick(clock, clock.tick);
+};
 
 /* 進む単位。既定は1 tick = キャンペーン1本。戻れません（時間の流れに逆らって
    守るゲームで、時間が戻れたら守る意味が消えます）。 */
-const advanceClock = (clock, ticks) =>
-  ({...clock, tick: clock.tick + Math.max(0, Math.round(ticks ?? 1))});
+const advanceClock = (clockIn, ticks) => {
+  const clock = safeClock(clockIn);
+  return {...clock, tick: clock.tick + Math.max(0, Math.round(num(ticks, 1)))};
+};
 
 /* その日付を含む最初の tick。ceil なので、期限の当日はもう「越えた」側の tick に
    入ります — 期限は猶予ではありません。 */
-const tickForDate = (clock, iso) =>
-  Math.max(0, Math.ceil(daysBetween(clock.start, iso) / clock.daysPerTick));
+const tickForDate = (clockIn, iso) => {
+  const clock = safeClock(clockIn);
+  return Math.max(0, Math.ceil(daysBetween(clock.start, iso) / clock.daysPerTick));
+};
 
 /* ---------------------------------------------------------------- 解決
    時刻 T で何が起こっているか。イベント源を引数で受ける純関数です。
@@ -113,15 +159,16 @@ const tickForDate = (clock, iso) =>
 
    `expired` / `expiring` は arrived の中からしか出ません。来ていないものを
    「期限切れで使っている」とは言えないからです。 */
-function resolveTimeline(clock, sources, opts){
-  const o = opts || {};
-  const tick = Math.max(0, Math.round(o.tick ?? clock.tick));
+function resolveTimeline(clockIn, sources, opts){
+  const clock = safeClock(clockIn);
+  const o = obj(opts);
+  const tick = Math.max(0, Math.round(num(o.tick, clock.tick)));
   const today = dateAtTick(clock, tick);
-  const horizon = Math.max(0, o.horizonDays ?? HORIZON_DAYS);
+  const horizon = Math.max(0, num(o.horizonDays, HORIZON_DAYS));
   const sinceDate = o.since == null ? null : dateAtTick(clock, o.since);
 
   const arrived = [], fresh = [], pending = [], expired = [], expiring = [];
-  for(const raw of (sources || [])){
+  for(const raw of arr(sources)){
     if(!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     if(!isIso(raw.at)) continue;
     const at = isoOf(raw.at);
@@ -151,7 +198,7 @@ function resolveTimeline(clock, sources, opts){
 /* 2つの時刻の間に来たものだけ。`resolveTimeline(..., {since})` の別の入口で、
    キャンペーンが1本流れたあとに「今回の分」を出すのがこれです。 */
 function arrivalsBetween(clock, fromTick, toTick, sources){
-  return resolveTimeline(clock, sources, {tick:toTick, since:fromTick}).fresh;
+  return resolveTimeline(clock, sources, {tick:num(toTick), since:num(fromTick)}).fresh;
 }
 
 /* 期限だけの視界。バージョン管理ページと、点の減算の入力になります。
@@ -163,10 +210,12 @@ function deadlinesAt(clock, sources, opts){
 
 /* 越えてからの日数。越えていなければ 0。減算が「越えている間ずっと」効くために
    呼ぶ側が使います。 */
-function overdueDays(clock, entry, opts){
-  if(!entry || !isIso(entry.until)) return 0;
-  const today = dateAtTick(clock, opts?.tick ?? clock.tick);
-  return Math.max(0, daysBetween(isoOf(entry.until), today));
+function overdueDays(clockIn, entry, opts){
+  const e = obj(entry);
+  if(!isIso(e.until)) return 0;
+  const clock = safeClock(clockIn);
+  const today = dateAtTick(clock, num(obj(opts).tick, clock.tick));
+  return Math.max(0, daysBetween(isoOf(e.until), today));
 }
 
 /* ---------------------------------------------------------------- 段（飛べない）
@@ -176,7 +225,7 @@ function overdueDays(clock, entry, opts){
    ここが持つのは「順序」と「その段がもう出ているか」だけで、上げると何が壊れる
    かは versions.js の持ち物です。 */
 function orderedTrack(track){
-  return (track || [])
+  return arr(track)
     .filter(r => r && typeof r === 'object' && !Array.isArray(r) && isIso(r.at))
     .map((r, i) => ({...r, at:isoOf(r.at), rank: typeof r.rank === 'number' ? r.rank : i}))
     .sort((a, b) => (a.rank - b.rank) || String(a.id).localeCompare(String(b.id)));
@@ -191,9 +240,10 @@ function orderedTrack(track){
      behind   最新の出ている段から何段遅れているか
      expired  いま居る段が自分の `until` を越えている（＝廃止されたものを
               使い続けている）。減算の入力です */
-function ladderAt(clock, track, currentId, opts){
+function ladderAt(clockIn, track, currentId, opts){
+  const clock = safeClock(clockIn);
   const rungs = orderedTrack(track);
-  const today = dateAtTick(clock, opts?.tick ?? clock.tick);
+  const today = dateAtTick(clock, num(obj(opts).tick, clock.tick));
   const view = rungs.map(r => ({...r,
     atTick: tickForDate(clock, r.at),
     daysUntil: daysBetween(today, r.at),
@@ -232,9 +282,10 @@ function ladderAt(clock, track, currentId, opts){
    1つでも未リリースの段が挟まっていれば `ok:false`（そこで止まる）。
 
    `reason` はキーです。文言はデータ側（呼ぶ側が語を持ちます）。 */
-function climbTo(clock, track, fromId, toId, opts){
+function climbTo(clockIn, track, fromId, toId, opts){
+  const clock = safeClock(clockIn);
   const rungs = orderedTrack(track);
-  const today = dateAtTick(clock, opts?.tick ?? clock.tick);
+  const today = dateAtTick(clock, num(obj(opts).tick, clock.tick));
   let i = -1, j = -1;
   for(let k = 0; k < rungs.length; k++){
     if(rungs[k].id === fromId) i = k;

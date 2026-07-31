@@ -46,6 +46,17 @@
  *   · `exit` で止まっている 1 tick が最大（加算が 0 になり、かつ最大の減算）
  */
 
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+   Contract §1: a bad input is an error VALUE, not an exception. Fuzzing the
+   eight files found the same shape in all of them — a collection argument that
+   was not a collection. `str()` absorbs Symbol, which `String()` throws on. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ---------------------------------------------------------------- 台帳 */
 
 /* 開始点。全部建てるには足りない額です（OSS 自前で9地区なら建設だけで
@@ -177,19 +188,27 @@ const GUARD_DEFAULTS = {
 };
 
 function newLedger(over){
-  const src = over || {};
+  const src = obj(over);
   const start = Number.isFinite(src.start) ? Math.max(0, Math.round(src.start))
                                            : SCORE_DEFAULTS.start;
   return {
     points: start,
     start,
-    tick: Math.max(0, Math.round(src.tick || 0)),
+    tick: Math.max(0, Math.round(num(src.tick))),
     earned: 0, lost: 0, spent: 0,
     bust: false,
     totals: { earn:{}, lose:{}, spend:{} },
     log: [],
     last: null
   };
+}
+
+/* 壊れた台帳は**既定の台帳として**扱います。`null` を返すと呼ぶ側が全部分岐し、
+   画面が点を出せなくなるので（`canPay` だけは例外で false に振ります）。 */
+function safeLedger(l){
+  const o = obj(l);
+  return Number.isFinite(o.points) && Number.isFinite(o.tick) && Array.isArray(o.log)
+      && obj(o.totals).earn ? o : newLedger(o);
 }
 
 /* ---------------------------------------------------------------- 値段 */
@@ -199,43 +218,50 @@ const whole = v => Math.round(Number.isFinite(v) ? v : 0);
 
 /* いまの値段。tick で上がります。 */
 function costAt(key, tick, opts){
-  const base = COSTS[key];
+  const base = COSTS[str(key)];
   if(!Number.isFinite(base)) return 0;
-  const n = Math.max(1, Math.round(opts?.count ?? 1));
-  const t = Math.max(0, Math.round(tick || 0));
+  const n = Math.max(1, Math.round(num(obj(opts).count, 1)));
+  const t = Math.max(0, Math.round(num(tick)));
   return Math.round(base * (1 + INFLATION * t)) * n;
 }
 
 /* 全部の値段を1枚で。画面（値札）と、詰みの判定に使えます。 */
 function priceList(tick){
-  return Object.keys(COSTS).map(key => ({key, jp:REASONS[key].jp, cost:costAt(key, tick)}));
+  return Object.keys(COSTS)
+    .map(key => ({key, jp:REASONS[key].jp, cost:costAt(key, num(tick))}));
 }
 
-const canPay = (ledger, key, opts) =>
-  ledger.points >= costAt(key, opts?.tick ?? ledger.tick, opts);
+/* 台帳が無い／壊れているときは「払えない」。**払えることにしない** —
+   支払いを黙って通すのが一番高い間違いです。 */
+const canPay = (ledgerIn, key, opts) => {
+  const ledger = obj(ledgerIn);
+  if(!Number.isFinite(ledger.points)) return false;
+  return ledger.points >= costAt(key, num(obj(opts).tick, num(ledger.tick)), opts);
+};
 
 /* ---------------------------------------------------------------- 台帳の更新 */
 
 function pushEntry(ledger, entry){
-  const log = ledger.log.concat([entry]);
+  const log = arr(ledger.log).concat([entry]);
   const max = Math.max(1, SCORE_DEFAULTS.logMax);
   return log.length > max ? log.slice(log.length - max) : log;
 }
 
 function addTotal(totals, bucket, key, amount){
-  const inner = {...totals[bucket]};
+  const inner = {...obj(obj(totals)[bucket])};
   inner[key] = (inner[key] || 0) + amount;
   return {...totals, [bucket]:inner};
 }
 
 /* 払う。足りなければ払いません（`last.ok === false` にその理由が載ります）。
    点は 0 を下回りません — 0 で終わりなので、負の残高に意味がありません。 */
-function payFrom(ledger, key, opts){
-  const o = opts || {};
-  const tick = Math.max(0, Math.round(o.tick ?? ledger.tick));
-  const count = Math.max(1, Math.round(o.count ?? 1));
+function payFrom(ledgerIn, key, opts){
+  const ledger = safeLedger(ledgerIn);
+  const o = obj(opts);
+  const tick = Math.max(0, Math.round(num(o.tick, ledger.tick)));
+  const count = Math.max(1, Math.round(num(o.count, 1)));
   const cost = costAt(key, tick, {count});
-  if(!COSTS[key])
+  if(!COSTS[str(key)])
     return {...ledger, last:{ok:false, kind:'spend', key, reason:'unknown', cost:0}};
   if(ledger.points < cost)
     return {...ledger, last:{ok:false, kind:'spend', key, reason:'short',
@@ -258,15 +284,15 @@ function payFrom(ledger, key, opts){
 /* この tick の加算率。**建設を1つも読まないこと**が、この関数の仕様です。
    `guard` に `built` / `districts` のようなキーが混ざっていても、ここは見ません。 */
 function earnRate(guard){
-  const g = {...GUARD_DEFAULTS, ...(guard || {})};
+  const g = {...GUARD_DEFAULTS, ...obj(guard)};
   if(g.dead || g.halted)
     return {rate:0, credit:0, held:0, quality:0, parts:{}, factors:{},
             blocked: g.dead ? 'dead' : 'halted'};
   const f = {
     clean:    1 - clamp01(clamp01(g.dropP) / EARN.dropFloor),
     surfaced: 1 - clamp01(clamp01(g.buriedP) / EARN.buriedFloor),
-    current:  (g.expired || []).length ? 0 : 1,
-    patched:  1 / (1 + Math.max(0, (g.vulns || []).length))
+    current:  arr(g.expired).length ? 0 : 1,
+    patched:  1 / (1 + Math.max(0, arr(g.vulns).length))
   };
   const held = clamp01(g.stopped);
   const parts = {};
@@ -281,7 +307,7 @@ function earnRate(guard){
 
 /* この tick の減算の内訳。 */
 function loseRate(guard){
-  const g = {...GUARD_DEFAULTS, ...(guard || {})};
+  const g = {...GUARD_DEFAULTS, ...obj(guard)};
   const items = [];
   const add = (key, count, amount, extra) => {
     if(count <= 0 || amount <= 0) return;
@@ -292,12 +318,12 @@ function loseRate(guard){
   /* 期間に比例: 1件 × 1 tick ごとに同額なので、総額 = LOSE.vuln × 件数 × tick数。
      `ages` は「なぜ減ったか」を後から言うためだけの記録で、金額には効きません
      （効かせると比例でなくなり、主張が言えなくなります）。 */
-  const vulns = (g.vulns || []).filter(Boolean);
+  const vulns = arr(g.vulns).filter(Boolean).map(obj);
   add('vuln', vulns.length, LOSE.vuln * vulns.length,
-      {ages: vulns.map(v => ({id: v && v.id, since: v && v.since}))});
-  const exp = (g.expired || []).filter(Boolean);
+      {ages: vulns.map(v => ({id: v.id ?? null, since: v.since ?? null}))});
+  const exp = arr(g.expired).filter(Boolean).map(obj);
   add('expired', exp.length, LOSE.expired * exp.length,
-      {ids: exp.map(v => v && v.id)});
+      {ids: exp.map(v => v.id ?? null)});
   if(g.dead) add('dead', 1, LOSE.dead);
   const extra = Math.max(0, whole(g.extraNodes));
   add('upkeep', extra, LOSE.upkeep * extra);
@@ -308,9 +334,10 @@ function loseRate(guard){
 
    順序は「入ってから出ていく」: 加算を載せ、それから減算を引きます。逆にすると
    同じ tick で 0 を割ってから回復する挙動になり、「0 で終わり」が揺れます。 */
-function tickLedger(ledger, guard, opts){
-  const o = opts || {};
-  const tick = Math.max(0, Math.round(o.tick ?? (ledger.tick + 1)));
+function tickLedger(ledgerIn, guard, opts){
+  const ledger = safeLedger(ledgerIn);
+  const o = obj(opts);
+  const tick = Math.max(0, Math.round(num(o.tick, ledger.tick + 1)));
   const date = o.date ? String(o.date) : null;
   const earn = earnRate(guard);
   const lose = loseRate(guard);
@@ -356,18 +383,19 @@ function tickLedger(ledger, guard, opts){
   };
 }
 
-const isBust = ledger => !!ledger && ledger.points <= 0;
+const isBust = ledger => !!ledger && num(obj(ledger).points, 1) <= 0;
 
 /* ---------------------------------------------------------------- 内訳
    **なぜ減ったかが後から言えること。** スコアと履歴のページがこれを読みます。
    返すのはキー・数値・データ側の語だけで、文はここにありません。 */
-function ledgerSummary(ledger, opts){
+function ledgerSummary(ledgerIn, opts){
+  const ledger = safeLedger(ledgerIn);
   const rows = (bucket, sign) =>
-    Object.entries(ledger.totals[bucket] || {})
+    Object.entries(obj(obj(ledger.totals)[bucket]))
       .map(([key, amount]) => ({key, jp:(REASONS[key] || {}).jp || key,
                                 amount: sign * amount}))
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  const tail = Math.max(0, opts?.recent ?? 24);
+  const tail = Math.max(0, num(obj(opts).recent, 24));
   return {
     points: ledger.points,
     start: ledger.start,
@@ -407,11 +435,12 @@ function ledgerSummary(ledger, opts){
  */
 const KIND_OF = { earn:'gain', lose:'loss', spend:'spend' };
 
-function ledgerBreakdown(ledger, opts){
-  const o = opts || {};
+function ledgerBreakdown(ledgerIn, opts){
+  const ledger = safeLedger(ledgerIn);
+  const o = obj(opts);
   const from = Number.isFinite(o.sinceTick) ? Math.max(0, Math.round(o.sinceTick)) : null;
   const entries = [];
-  for(const e of (ledger.log || [])){
+  for(const e of arr(ledger.log).map(obj)){
     if(from !== null && e.tick < from) continue;
     /* 0 点の加算行も残します。**「守れていたのに 0 点だった」は情報**で、
        落とすと停止中の tick が履歴から消えます（`key:'dead'` / `'halted'`）。 */
@@ -437,7 +466,7 @@ function ledgerBreakdown(ledger, opts){
     entries,
     /* 期首と期末が entries で説明できること。ズレたらどこかが台帳を直接触っています */
     reconciles: ledger.start + entries.reduce((s, e) => s + e.delta, 0) === ledger.points,
-    truncated: Math.max(0, (ledger.log || []).length - entries.length)
+    truncated: Math.max(0, arr(ledger.log).length - entries.length)
   };
 }
 

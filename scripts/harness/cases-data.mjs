@@ -169,6 +169,85 @@ for(const file of Object.keys(MODULES)){
 }
 
 /* ------------------------------------------------------------------ *
+ * 全域性 — 壊れた入力で throw しないこと（契約 §1）
+ * ------------------------------------------------------------------
+ * **契約は「壊れた入力はエラー値で返す。例外ではない」と決めています**
+ * （CONTRACT-datalayer.md §1・`setProfile()` がエラー配列を返すのと同じ理由）。
+ * データ層はそれを破っていました: `normalisePosture({caps:5})` が
+ * `TypeError: number 5 is not iterable` を投げ、**検査レーンが F6 のチェックを
+ * 書いている最中に踏みました** — つまり私たち以外の最初の呼び手が即座に踏んだ。
+ *
+ * 直したあとに8ファイルを総当たりしたら、**同じ形が 115 箇所**ありました。
+ * 1件のバグではなく**イディオムの欠落**だったので、各ファイルに `arr` / `obj` /
+ * `num` / `str` を置いて公開入口を全部通しました。
+ *
+ * ここはその回帰です。**新しい関数を足したら自動で対象に入ります**（export を
+ * 走査するので登録作業は要りません）。
+ *
+ * Symbol は対象外です。`String(Symbol)` は throw しますが、ゲームのデータ層に
+ * Symbol が来る経路が無く、8ファイルに guard を撒く方が読みにくくなります
+ * （`str()` がついでに吸収しているので、実際には落ちません）。
+ * ------------------------------------------------------------------ */
+G('全域性（壊れた入力で throw しない・契約 §1）');
+
+const HOSTILE = [undefined, null, 0, 1, -1, NaN, Infinity, '', 'x', true, false,
+                 [], {}, [null], [undefined],
+                 /* 実際に踏まれた形: コレクションのはずが数値／文字列 */
+                 {caps:5}, {built:5}, {caps:'kernelPath'}, {middleware:5}, {vulns:5},
+                 () => {}, new Date(), new Map()];
+
+for(const [file, mod] of Object.entries(MODULES)){
+  check(`${file} のどの export も壊れた入力で throw しない`, () => {
+    const fns = Object.entries(mod).filter(([, f]) => typeof f === 'function');
+    assert(fns.length, `${file}: 関数 export が無い`);
+    const bad = [];
+    let calls = 0;
+    for(const [name, fn] of fns)
+      for(let n = 0; n <= Math.min(4, Math.max(1, fn.length)); n++)
+        for(const h of HOSTILE){
+          calls++;
+          try { fn(...Array(n).fill(h)); }
+          catch (e) {
+            if(e instanceof TypeError || e instanceof RangeError)
+              bad.push(`${name}/${n}引数 -> ${e.constructor.name}: ${e.message.slice(0,50)}`);
+          }
+        }
+    assert(!bad.length, `${bad.length} 件 throw: ${bad.slice(0,3).join(' | ')}`);
+    return `${fns.length} 関数 × ${HOSTILE.length} 種 = ${calls} 呼び出しで throw 0`;
+  });
+}
+
+check('壊れた posture はエラーとして返る（例外ではない）', () => {
+  const errs = CAMP.postureErrors({caps:5, built:'driver', bogus:1, stack:'x'});
+  assert(errs.length >= 3, `エラーが出ていない: ${j(errs)}`);
+  assert(errs.some(e => e.includes('caps')), 'caps の型エラーが出ない');
+  assert(errs.some(e => e.includes('bogus')), '未知のキーが報告されない');
+  assert(errs.some(e => e.includes('stack')), 'stack の値エラーが出ない');
+  /* 同じ入力で normalisePosture は throw せず、既定に落ちる */
+  const p = CAMP.normalisePosture({caps:5, built:'driver'});
+  assert(Array.isArray(p.caps) && !p.caps.length, `caps が既定に落ちていない: ${j(p.caps)}`);
+  assert(!CAMP.postureErrors(undefined).length, '未指定がエラーになっている（既定は正当）');
+  assert(!CAMP.postureErrors({built:['driver'], caps:['kernelPath']}).length,
+    '正しい posture がエラーになっている');
+  return `${errs.length} 件のエラーを返し、throw しない`;
+});
+
+check('壊れた時計・台帳でも日付と点が出る（画面が分岐しなくて済む）', () => {
+  assert(TL.clockDate(null), '時計が null で日付が出ない');
+  assert(TL.clockDate({start:'not-a-date', daysPerTick:'x', tick:-5}),
+    '壊れた時計で日付が出ない');
+  assert(TL.dateAtTick(null, 3), 'dateAtTick が壊れた時計で答えない');
+  assert(SCORE.ledgerSummary(null).points === SCORE.SCORE_DEFAULTS.start,
+    '壊れた台帳で内訳が出ない');
+  /* canPay だけは「払える」に倒さない — 支払いを黙って通すのが一番高い間違い */
+  assert(SCORE.canPay(null, 'district') === false,
+    '台帳が無いのに「払える」と答えた');
+  assert(SCORE.canPay({points:'x', tick:0, log:[], totals:{earn:{}}}, 'district') === false,
+    'points が数値でないのに払えると答えた');
+  return '壊れた時計→既定の日付 · 壊れた台帳→既定の内訳 · canPay は false に倒す';
+});
+
+/* ------------------------------------------------------------------ *
  * 横断の参照整合 — 8ファイルを1本で持つ理由がここ
  * ------------------------------------------------------------------
  * ファイル同士は import しません（1つ足すのに他を触らないため）。その代わり
@@ -612,14 +691,27 @@ check('未固定の事実は isFixed() が false を返す（画面に事実と�
     assert(!VER.isFixed(id), `${id} が固定済みと出てしまう（INVARIANTS にまだ無い）`);
   assert(VER.fixedOnly(VER.deadlines('2026-07-31')).length === 0,
     '固定済みの締切が出ている（BOARD D1/D2 が閉じたらここを更新する）');
-  /* 出典より広い register は weak として未固定扱い */
-  const weak = VER.claimById('modern-ebpf-default-since-0.38');
-  assert(weak.status === 'weak' && !VER.isFixed('driver_autoselect'),
-    'weak な claim が固定済み扱いになっている');
+  /* **「0.38 以降 modern_ebpf が既定」を版の主張として復活させないこと。**
+     検査レーンが INVARIANTS 3.1 からバージョンの帰属を外しました（出典が GKE と
+     kmod の話で版を名指ししていない）。INVARIANTS §10.2 が「誰かが逆に直さないため」
+     として明記しているので、こちらも機械で押さえます。 */
+  assert(!VER.claimById('modern-ebpf-default-since-0.38'),
+    '版を名指しする claim が復活している（§3.1 は帰属を落としました）');
+  const dflt = VER.claimById('modern-ebpf-is-the-default');
+  assert(dflt, 'modern eBPF が既定という（版なしの）claim が無い');
+  assert(dflt.invariant === null && dflt.status === 'verified',
+    `register に無いはずが ${dflt.invariant} / ${dflt.status} になっている`);
+  assert(!/0\.38|0\.3[0-9] 以降|since/.test(dflt.jp),
+    `claim の文が版を名指ししている: ${dflt.jp}`);
+  assert(!VER.isFixed('driver_autoselect'),
+    'driver_autoselect が固定済み扱いになっている（register に無い）');
   /* すべての claim が出典を持つこと */
   for(const c of VER.CLAIMS.concat(POL.CLAIMS))
     assert(c.src && c.src.length, `claim ${c.id} に出典が無い`);
-  return `未固定 ${VER.unregisteredClaims().length} 件（うち weak 1）· 締切の固定済み 0 件 · 出典なし 0 件`;
+  /* weak は「登録されているが出典より強い」状態。いま該当は無いのが正しい */
+  const weak = VER.CLAIMS.concat(POL.CLAIMS).filter(c => c.status === 'weak');
+  return `未固定 ${VER.unregisteredClaims().length} 件（weak ${weak.length}）`
+       + ` · 締切の固定済み 0 件 · 出典なし 0 件 · 版を名指しする既定の主張なし`;
 });
 
 /* ------------------------------------------------------------------ *

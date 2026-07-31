@@ -70,6 +70,17 @@
  * — and that is the whole game.
  */
 
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+   Contract §1: a bad input is an error VALUE, not an exception. Fuzzing the
+   eight files found the same shape in all of them — a collection argument that
+   was not a collection. `str()` absorbs Symbol, which `String()` throws on. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ---------------------------------------------------------------- versions
 
    Rung shape:
@@ -203,10 +214,13 @@ const VERSIONS = [
     ],
     cost:{ rolling:true, redeployDriver:false, asks:['platform'], blind:1 },
     src:['https://falco.org/blog/falco-0-38-0/'],
-    notes:'0.38 のリリースノート自身の言い方は「falcoctl がシステムを判定して'+
-          '最も互換なドライバを自動選択する（新しいカーネルなら modern eBPF）」。'+
-          '「0.38 以降 modern_ebpf が既定」は INVARIANTS 3.1 の登録どおりに扱い、'+
-          '現行ドキュメントは版を書かずに Modern eBPF を (default) と書いている'
+    notes:'この段が与えるのは <b>falcoctl の自動選択</b>だけです。'+
+          'リリースノートの言い方は「falcoctl がシステムを判定して最も互換な'+
+          'ドライバを自動選択する（新しいカーネルなら modern eBPF）」。'+
+          '<b>「0.38 以降 modern_ebpf が既定」という版の主張は落としました</b> — '+
+          '検査レーンが INVARIANTS 3.1 からバージョンの帰属を外し、'+
+          '出典が支える「現行の falco.yaml が modern_ebpf を出荷している」と'+
+          '「(default) と書いてある（版なし）」だけを残しています（§CLAIMS）'
   },
   {
     id:'falco-0.39', line:'falco', ver:'0.39.0', released:'2024-10-01',
@@ -632,16 +646,25 @@ const CLAIMS = [
     covers:['universal_ebpf'],
     src:['https://docs.sysdig.com/en/sysdig-secure/classic-agent-drivers/'] },
 
-  /* PM が確定として渡した「0.38 以降 modern_ebpf が既定」。INVARIANTS 3.1 は
-     括弧書きで持っているが、**その行が引いている出典は GKE と kmod の話**で、
-     版を名指ししていない。0.38 のリリースノート自身の言い方は「falcoctl が
-     システムを判定して最も互換なドライバを自動選択する」で、現行の
-     kernel drivers ページは版を書かずに Modern eBPF を (default) と書いている。
-     よって status:'weak' — 登録はされているが、出典より強い。BOARD §2 D5。 */
-  { id:'modern-ebpf-default-since-0.38', invariant:'3.1', status:'weak',
-    jp:'0.38 以降 modern_ebpf が既定',
+  /* **決着しました（2026-08-01・検査レーン）。** 発注書は「0.38 以降 modern_ebpf が
+     既定」を確定として渡し、INVARIANTS 3.1 が括弧書きで登録していましたが、
+     その行が引いていた出典は GKE と kmod の話で**版を名指ししていません**。
+     検査レーンが §3.1 から**バージョンの帰属を落とし**、出典が実際に支える範囲だけを
+     残しました:
+
+       ・現行の `falco.yaml` が `engine.kind: modern_ebpf` を出荷している
+       ・kernel-drivers ページが Modern eBPF を **(default) と書いている（版なし）**
+
+     なので「0.38 から」という主張は**もう register に無い** — `invariant:null` /
+     `status:'verified'` が正しい状態です（`weak` は「登録されているが出典より強い」で、
+     いまは登録そのものが無い）。この版で得られるのは `driver_autoselect`（falcoctl が
+     システムを判定して最も互換なドライバを選ぶ）だけで、それはリリースノートが
+     直接書いています。BOARD §2 D5 / D34。 */
+  { id:'modern-ebpf-is-the-default', invariant:null, status:'verified',
+    jp:'現行の falco.yaml は engine.kind: modern_ebpf を出荷し、'+
+       'kernel-drivers ページは Modern eBPF を (default) と書く（**版の指定なし**）',
     covers:['driver_autoselect'],
-    src:['https://falco.org/blog/falco-0-38-0/',
+    src:['https://github.com/falcosecurity/falco/blob/master/falco.yaml',
          'https://falco.org/docs/concepts/event-sources/kernel/'] },
 
   { id:'base-syscalls-union', invariant:'2.1', status:'registered',
@@ -719,8 +742,8 @@ const UPGRADE_COST = { rolling:true, redeployDriver:false, asks:[], blind:1 };
 /* 'x.y.z' compared numerically. Returns <0, 0, >0. Missing parts are 0, so
    '0.40' and '0.40.0' compare equal. */
 function compareVer(a, b){
-  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
-  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pa = str(a).split('.').map(n => parseInt(n, 10) || 0);
+  const pb = str(b).split('.').map(n => parseInt(n, 10) || 0);
   const len = Math.max(pa.length, pb.length);
   for(let i = 0; i < len; i++){
     const d = (pa[i] || 0) - (pb[i] || 0);
@@ -732,10 +755,12 @@ const verAtLeast = (a, b) => compareVer(a, b) >= 0;
 
 /* ISO dates as strings compare correctly with < and >, which is the reason they
    are strings. Wrapped anyway so a caller never has to know that. */
-const dateAtLeast = (a, b) => String(a) >= String(b);
+const dateAtLeast = (a, b) => str(a) >= str(b);
 const DAY_MS = 86400000;
-const daysBetween = (from, to) =>
-  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
+const daysBetween = (from, to) => {
+  const d = (Date.parse(`${str(to)}T00:00:00Z`) - Date.parse(`${str(from)}T00:00:00Z`)) / DAY_MS;
+  return Number.isFinite(d) ? Math.round(d) : 0;
+};
 
 const byVersionId = id => VERSIONS.find(v => v.id === id) || null;
 const lineById    = id => LINES.find(l => l.id === id) || null;
@@ -872,13 +897,14 @@ function upgradeEffects(fromId, toId){
  * available at all: `reachable:false`. That is the 0.37–0.39 valley, and it is
  * the honest answer rather than a hidden one.
  */
-function activeBreaks(id, ctx = {}){
+function activeBreaks(id, ctxIn = {}){
+  const ctx = obj(ctxIn);
   const v = byVersionId(id);
   if(!v) return [];
   const list = ladder(v.line);
   const upto = list.slice(0, list.findIndex(x => x.id === id) + 1);
-  const have = ctx.plugins || [];
-  const caps = capabilitiesAt(id).concat(ctx.caps || []);
+  const have = arr(ctx.plugins);
+  const caps = capabilitiesAt(id).concat(arr(ctx.caps));
   const out = [];
   for(const rung of upto)
     for(const b of rung.breaks){
@@ -886,7 +912,7 @@ function activeBreaks(id, ctx = {}){
       let repaired = false, reachable = true, needs = null;
       if(rep){
         const okVer = !rep.minVer || verAtLeast(v.ver, rep.minVer);
-        const okCap = (rep.needs || []).every(c => caps.includes(c));
+        const okCap = arr(rep.needs).every(c => caps.includes(c));
         reachable = okVer && okCap;
         repaired = reachable && !!rep.plugin && have.includes(rep.plugin);
         /* a repair with no plugin to install is a配線 job (config, an ask): the
@@ -894,7 +920,7 @@ function activeBreaks(id, ctx = {}){
            the rules layer decide when it is satisfied */
         needs = { plugin:rep.plugin || null, minVer:rep.minVer || null,
                   district:rep.district || null, ask:rep.ask || null,
-                  caps:(rep.needs || []).slice() };
+                  caps:arr(rep.needs).slice() };
       }
       if(!repaired)
         out.push({ version:rung.id, ver:rung.ver, ...b,
@@ -925,7 +951,7 @@ function naFieldsAt(id, ctx = {}){
    `fields` is what the rule's condition names. */
 function fieldsUsable(id, fields, ctx = {}){
   const dead = naFieldsAt(id, ctx).map(x => x.field);
-  const lost = (fields || []).filter(f => dead.includes(f));
+  const lost = arr(fields).filter(f => dead.includes(f));
   return { usable:lost.length === 0, lost };
 }
 
@@ -978,11 +1004,12 @@ function repairFor(breakId, id, ctx = {}){
  * is also what makes 製造業 genuinely stuck rather than merely discouraged —
  * an old kernel with no BTF, on a node OS that forbids kmod, after 0.44.0
  * removed the legacy probe, has nothing left to load. */
-function driverBlockers(driverId, ctx = {}){
+function driverBlockers(driverId, ctxIn = {}){
+  const ctx = obj(ctxIn);
   const d = driverById(driverId);
   if(!d) return [{ code:'unknown-driver', id:driverId, soft:false }];
   const out = [];
-  if((ctx.blocked || []).includes(driverId))
+  if(arr(ctx.blocked).includes(driverId))
     out.push({ code:'blocked-by-node-os', soft:false });
   if(d.fromVer && ctx.version){
     const v = byVersionId(ctx.version);
@@ -1011,7 +1038,8 @@ function driverBlockers(driverId, ctx = {}){
 
 /* the drivers that are actually available, and the ones that are only
    discouraged. `soft` blockers do not remove a driver — they annotate it. */
-function driversAt(ctx = {}){
+function driversAt(ctxIn = {}){
+  const ctx = obj(ctxIn);
   const line = ctx.line || (ctx.version ? (byVersionId(ctx.version)?.line) : 'falco');
   const out = [];
   for(const d of DRIVER_LIFECYCLE){
@@ -1028,12 +1056,13 @@ function driversAt(ctx = {}){
    on a node OS that forbids kmod, after the legacy probe is gone. Returns the
    surviving driver ids; empty means this place can no longer be watched from
    the kernel at all, and only plugin sources deliver (INVARIANTS 3.10). */
-const workingDrivers = ctx => driversAt(ctx).filter(d => d.ok).map(d => d.id);
+const workingDrivers = ctx => driversAt(obj(ctx)).filter(d => d.ok).map(d => d.id);
 
 /* ---------------------------------------------------------------- deadlines */
 
 /* retirements that have already happened, for this line, at this date/version */
-function retiredAt(ctx = {}){
+function retiredAt(ctxIn = {}){
+  const ctx = obj(ctxIn);
   return DEPRECATIONS.filter(d => {
     if(ctx.line && d.owner !== ctx.line) return false;
     if(d.endsOn && ctx.date && dateAtLeast(ctx.date, d.endsOn)) return true;
@@ -1047,7 +1076,8 @@ function retiredAt(ctx = {}){
 
 /* what is coming, and how long there is. `days` is negative once it has passed,
    which is deliberate: "you are 40 days late" is a sentence the game needs. */
-function deadlines(date, ctx = {}){
+function deadlines(date, ctxIn = {}){
+  const ctx = obj(ctxIn);
   return DEPRECATIONS
     .filter(d => !ctx.line || d.owner === ctx.line)
     .filter(d => !!d.endsOn)
@@ -1091,7 +1121,7 @@ const unregisteredClaims = () =>
    property that carries the data id, so this works on breaks, deadlines,
    drivers — anything in this file. */
 const fixedOnly = (items, key = 'id') =>
-  (items || []).filter(x => isFixed(x && x[key]));
+  arr(items).filter(x => isFixed(x && x[key]));
 
 /* ---------------------------------------------------------------- §unsourced
  * Left out on purpose, because there is no primary source for it. Written down
@@ -1104,12 +1134,14 @@ const fixedOnly = (items, key = 'id') =>
  *     retirement. That is not a placeholder for a table somebody should invent.
  *   - MINIMUM AGENT VERSIONS for Universal eBPF / kernel module / legacy eBPF.
  *     The drivers page states kernel versions and not agent versions.
- *   - "0.38 以降 modern_ebpf が既定" as a version claim. The 0.38 release note
- *     says falcoctl picks the most compatible driver; the current kernel-drivers
- *     page marks Modern eBPF `(default)` with no version attached. Carried as
- *     `driver_autoselect`, and as §CLAIMS `modern-ebpf-default-since-0.38` with
- *     status `weak` — INVARIANTS 3.1 registers the stronger wording and its
- *     citation does not support it, so isFixed() answers false for it.
+ *   - "0.38 以降 modern_ebpf が既定" as a VERSION claim. Settled 2026-08-01: the
+ *     inspection lane removed the version attribution from INVARIANTS 3.1,
+ *     because the citation there is about GKE and kmod and names no version. The
+ *     0.38 release note says falcoctl picks the most compatible driver, and the
+ *     current kernel-drivers page marks Modern eBPF `(default)` with no version
+ *     attached. So this rung grants `driver_autoselect` and nothing more, and
+ *     §CLAIMS carries `modern-ebpf-is-the-default` (invariant:null) for what the
+ *     sources DO support. Nobody should re-attach a version to it.
  *   - RULES-ARTIFACT ↔ ENGINE VERSION compatibility (`required_engine_version`).
  *     Real, and not verified for the specific artifact versions in
  *     src/policies.js §MATURITIES, so it is not modelled as a requirement.

@@ -50,11 +50,33 @@
  * likely to have.
  */
 
+
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+ *
+ * The contract (CONTRACT-datalayer.md §1) says a bad input comes back as an
+ * ERROR VALUE and not as an exception, and this file was breaking that:
+ * `normalisePosture({caps:5})` threw `TypeError: number 5 is not iterable`
+ * because `new Set(5)` does. The inspection lane hit it while writing the F6
+ * checks — i.e. the first caller that was not us hit it immediately.
+ *
+ * Fuzzing all eight files afterwards found 115 more of the same shape, so this
+ * is not one bug; it is a missing idiom. These four coercions are that idiom,
+ * and every public entry point below runs its arguments through them. Callers
+ * that want to KNOW the input was wrong ask `postureErrors()`.
+ *
+ * `str()` also absorbs Symbol, which `String()` throws on. Cheap, so it is in. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ---------------------------------------------------------------- rng
    mulberry32. Seeded, tiny, and identical across engines — the harness in
    scripts/harness/env.mjs pins Math.random with the same one. */
 function makeRng(seedIn = 1){
-  let a = (seedIn | 0) || 1;
+  let a = (num(seedIn, 1) | 0) || 1;
   return () => {
     a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -79,7 +101,7 @@ const PHASE_OF = {
   k8sapi:'recon', exec:'access', shadow:'creds', imds:'creds',
   cron:'persist', dropbin:'persist', cloud:'exfil'
 };
-const phaseOf = st => PHASE_OF[st.id] || (st.response ? 'exfil' : 'access');
+const phaseOf = st => PHASE_OF[obj(st).id] || (obj(st).response ? 'exfil' : 'access');
 const phaseRank = id => { const i = PHASES.findIndex(p => p.id === id); return i < 0 ? 1 : i; };
 
 /* ---------------------------------------------------------------- intents
@@ -133,19 +155,48 @@ const POSTURE_DEFAULTS = {
   rulesetTick:null, patched:[], stack:'oss', profile:null, focus:[], forbidden:[]
 };
 function normalisePosture(postureIn = {}){
-  const p = { ...POSTURE_DEFAULTS, ...postureIn };
+  const p = { ...POSTURE_DEFAULTS, ...obj(postureIn) };
+  /* every list is coerced, never spread blind: `new Set(5)` throws and a posture
+     assembled from live state is exactly where a stray number comes from */
   return {
-    built:[...new Set(p.built || [])],
-    caps:[...new Set(p.caps || [])],
-    tracedOff:[...new Set(p.tracedOff || [])],
+    built:[...new Set(arr(p.built).map(str).filter(Boolean))],
+    caps:[...new Set(arr(p.caps).map(str).filter(Boolean))],
+    tracedOff:[...new Set(arr(p.tracedOff).map(str).filter(Boolean))],
     following: p.following !== false,
-    rulesetTick: p.rulesetTick ?? null,
-    patched:[...new Set(p.patched || [])],
+    rulesetTick: Number.isFinite(p.rulesetTick) ? p.rulesetTick : null,
+    patched:[...new Set(arr(p.patched).map(str).filter(Boolean))],
     stack: p.stack === 'sysdig' ? 'sysdig' : 'oss',
-    profile: p.profile || null,
-    focus:[...new Set(p.focus || [])],
-    forbidden:[...new Set(p.forbidden || [])]
+    profile: p.profile ? str(p.profile) : null,
+    focus:[...new Set(arr(p.focus).map(str).filter(Boolean))],
+    forbidden:[...new Set(arr(p.forbidden).map(str).filter(Boolean))]
   };
+}
+
+/* WHAT WAS WRONG WITH THE POSTURE, as data. Same shape and same reason as
+   timeline.js §timelineErrors and score.js §scoreErrors: `normalisePosture()`
+   is total so the game keeps running, and this is how a caller finds out it
+   handed over something it did not mean to. Empty is the healthy answer. */
+function postureErrors(postureIn, label){
+  const name = label || 'posture';
+  const out = [];
+  if(postureIn === undefined || postureIn === null) return out;   /* defaults are fine */
+  if(typeof postureIn !== 'object' || Array.isArray(postureIn))
+    return [`${name}: must be an object`];
+  for(const k of ['built','caps','tracedOff','patched','focus','forbidden'])
+    if(postureIn[k] !== undefined && !Array.isArray(postureIn[k]))
+      out.push(`${name}.${k}: must be an array of ids, got ${typeof postureIn[k]}`);
+  for(const k of ['built','caps','tracedOff','patched','focus','forbidden'])
+    for(const [i, v] of arr(postureIn[k]).entries())
+      if(typeof v !== 'string' || !v)
+        out.push(`${name}.${k}[${i}]: must be a non-empty string id`);
+  if(postureIn.rulesetTick !== undefined && postureIn.rulesetTick !== null
+     && !Number.isFinite(postureIn.rulesetTick))
+    out.push(`${name}.rulesetTick: must be a finite number or null`);
+  if(postureIn.stack !== undefined && !['oss','sysdig'].includes(postureIn.stack))
+    out.push(`${name}.stack: must be 'oss' or 'sysdig'`);
+  for(const k of Object.keys(postureIn))
+    if(!(k in POSTURE_DEFAULTS)) out.push(`${name}: unknown key "${k}"`);
+  return out;
 }
 
 /* ---------------------------------------------------------------- steps
@@ -165,39 +216,42 @@ function normalisePosture(postureIn = {}){
                               rules lane can make it per-rule without this file
                               changing (see BOARD §2). */
 function vulnStep(vuln, chainSteps){
-  const via = (chainSteps || []).find(s => s.id === vuln.detect.via);
+  const v = obj(vuln), d = obj(v.detect);
+  if(!v.id || !d.via) return null;
+  const via = arr(chainSteps).find(s => obj(s).id === d.via);
   if(!via) return null;
-  const newRule = !!vuln.detect.newRule;
-  const needs = [...new Set([...(via.needs || []), ...(newRule ? ['falcoctl'] : [])])];
+  const newRule = !!d.newRule;
+  const needs = [...new Set([...arr(via.needs), ...(newRule ? ['falcoctl'] : [])])];
   return {
-    id:`v-${vuln.id}`,
-    jp:`${vuln.code} を踏む — ${vuln.jp}`,
-    rule: vuln.detect.rule || via.rule,
+    id:`v-${v.id}`,
+    jp:`${v.code} を踏む — ${v.jp}`,
+    rule: d.rule || via.rule,
     needs,
-    needsCaps:[...(via.needsCaps || [])],
-    needsSyscalls:[...(via.needsSyscalls || [])],
+    needsCaps:[...arr(via.needsCaps)],
+    needsSyscalls:[...arr(via.needsSyscalls)],
     /* generated-step metadata. Prefixed so nothing can confuse it with the
        hand-written chain's own fields. */
     gen:true,
     via: via.id,
-    vuln: vuln.id,
-    mw: vuln.mw,
-    sev: vuln.sev,
-    maturity: vuln.detect.maturity || 'stable',
+    vuln: v.id,
+    mw: v.mw,
+    sev: v.sev,
+    maturity: d.maturity || 'stable',
     newRule,
-    since: vuln.t ?? 0,
-    ruleSince: newRule ? (vuln.t ?? 0) + 1 : 0,
+    since: num(v.t),
+    ruleSince: newRule ? num(v.t) + 1 : 0,
     why: newRule
-      ? `${vuln.why} この検知は <b>${vuln.detect.maturity}</b> なので既定パッケージに入っていない — `+
+      ? `${v.why} この検知は <b>${d.maturity}</b> なので既定パッケージに入っていない — `+
         '<code>falcoctl</code> が取得して<b>追従している</b>ことが条件。'
-      : vuln.why
+      : v.why
   };
 }
 /* a plain chain step, copied so the caller's CHAIN is never mutated */
 function baseStep(st){
-  return { ...st, needs:[...(st.needs || [])],
-           needsCaps:[...(st.needsCaps || [])],
-           needsSyscalls:[...(st.needsSyscalls || [])],
+  const s = obj(st);
+  return { ...s, needs:[...arr(s.needs)],
+           needsCaps:[...arr(s.needsCaps)],
+           needsSyscalls:[...arr(s.needsSyscalls)],
            gen:false, since:0, ruleSince:0, newRule:false };
 }
 
@@ -220,7 +274,7 @@ const REMEDY_TEXT = {
 };
 /* possible in this environment at all */
 const possibleHere = (st, caps) =>
-  (st.needsCaps || []).every(c => caps.includes(c));
+  arr(obj(st).needsCaps).every(c => arr(caps).includes(c));
 
 const DISTRICT_ROLE = {                /* campaign.js OWNER, by id not by import */
   driver:'platform', state:'platform', ring:'sre',
@@ -235,25 +289,26 @@ const upstreamFirst = ids => ids.slice().sort((a, b) => {
   const x = DISTRICT_ORDER.indexOf(a), y = DISTRICT_ORDER.indexOf(b);
   return (x < 0 ? 99 : x) - (y < 0 ? 99 : y);
 });
-function evadesPosture(st, postureIn){
+function evadesPosture(stIn, postureIn){
+  const st = obj(stIn);
   const p = normalisePosture(postureIn);
   /* a behaviour this environment cannot produce is not a miss and not a hole —
      it is a non-event (campaign.js §needsCaps). Named so a caller that changed
      the environment after generating cannot silently score it as caught. */
   if(!possibleHere(st, p.caps))
     return { evades:false, cause:'impossible', target:null, remedy:null };
-  const missing = upstreamFirst((st.needs || []).filter(k => !p.built.includes(k)));
+  const missing = upstreamFirst(arr(st.needs).filter(k => !p.built.includes(k)));
   if(missing.length)
     return { evades:true, cause:'unbuilt', target:missing[0],
              remedy:{ kind:'build', target:missing[0], role:DISTRICT_ROLE[missing[0]] || null,
                       jp:`<b>${missing[0]}</b>${REMEDY_TEXT.build}` } };
-  if((st.needs || []).includes('falcoctl') && !p.following)
+  if(arr(st.needs).includes('falcoctl') && !p.following)
     return { evades:true, cause:'stale', target:'falcoctl',
              remedy:{ kind:'follow', target:'falcoctl', role:'detect', jp:REMEDY_TEXT.follow } };
   if(st.ruleSince && p.rulesetTick != null && p.rulesetTick < st.ruleSince)
     return { evades:true, cause:'stale', target:'falcoctl',
              remedy:{ kind:'update', target:'falcoctl', role:'detect', jp:REMEDY_TEXT.update } };
-  const need = st.needsSyscalls || [];
+  const need = arr(st.needsSyscalls);
   if(need.length && need.every(n => p.tracedOff.includes(n)))
     return { evades:true, cause:'blind', target:need[0],
              remedy:{ kind:'untrace', target:need[0], role:'sre',
@@ -271,13 +326,15 @@ function evadesPosture(st, postureIn){
    (vulns.js vulnsFor() resolves it). When it is true, patching is not an answer,
    and detection is the only control left — which is the manufacturing case, and
    it has to fall out of the data rather than out of a special case here. */
-function remediesForStep(st, postureIn, vulnIndex){
+function remediesForStep(stIn, postureIn, vulnIndex){
+  const st = obj(stIn);
   const p = normalisePosture(postureIn);
   const out = [];
   const ev = evadesPosture(st, p);
   if(ev.remedy) out.push(ev.remedy);
   if(st.vuln){
-    const v = vulnIndex ? vulnIndex.get(st.vuln) : null;
+    const lookup = vulnIndex && typeof vulnIndex.get === 'function' ? vulnIndex : null;
+    const v = lookup ? lookup.get(st.vuln) : null;
     const blocked = !!(v && v.blocked);
     if(!p.patched.includes(st.vuln))
       out.push({ kind:'patch', target:st.vuln, role:'app', blocked,
@@ -348,17 +405,19 @@ const FAIRNESS = {
      seed       reproducibility
      size       how many steps to send (clamped to FAIRNESS)
    returns plain data. */
-function generateCampaign(opts = {}){
-  const chainSteps = opts.chain || [];
-  const tickNo = opts.tick ?? 0;
+function generateCampaign(optsIn = {}){
+  const opts = obj(optsIn);
+  const chainSteps = arr(opts.chain);
+  const tickNo = num(opts.tick);
   const p = normalisePosture(opts.posture);
-  const seedIn = (opts.seed ?? 1);
+  const seedIn = num(opts.seed, 1);
   const rng = makeRng(hashSeed(`${seedIn}#${tickNo}#${p.profile || ''}`));
-  const sevW = opts.sevWeight || { crit:1.0, high:0.6, med:0.3 };
+  const sevW = obj(opts.sevWeight).crit !== undefined
+             ? obj(opts.sevWeight) : { crit:1.0, high:0.6, med:0.3 };
 
   /* which vulnerabilities are actually in play */
-  const live = (opts.vulns || [])
-    .filter(v => (v.t ?? 0) <= tickNo && !p.patched.includes(v.id));
+  const live = arr(opts.vulns).map(obj)
+    .filter(v => !!v.id && num(v.t) <= tickNo && !p.patched.includes(v.id));
   const vulnIndex = new Map(live.map(v => [v.id, v]));
 
   /* candidates: the library, plus one per live vulnerability */
@@ -506,12 +565,14 @@ function pickIntent(steps, picked, tickNo){
    Production runs by itself: one campaign per tick, each generated against the
    posture as it is at that tick. Pass a function-free posture per tick if the
    player changed something — this module never mutates what it is given. */
-function generateSeries(opts = {}){
-  const ticks = opts.ticks ?? 10;
-  const from = opts.from ?? 0;
+function generateSeries(optsIn = {}){
+  const opts = obj(optsIn);
+  const ticks = Math.max(0, Math.round(num(opts.ticks, 10)));
+  const from = Math.round(num(opts.from));
   const out = [];
   for(let t = from; t < from + ticks; t++){
-    const postureAt = opts.postureAt ? opts.postureAt(t) : opts.posture;
+    const postureAt = typeof opts.postureAt === 'function'
+                    ? opts.postureAt(t) : opts.posture;
     out.push(generateCampaign({ ...opts, tick:t, posture:postureAt }));
   }
   return out;
@@ -524,13 +585,17 @@ function generateSeries(opts = {}){
    be able to reach out and follow rule artifacts, for instance). A step whose
    every remedy is forbidden or blocked is UNANSWERABLE, and an unanswerable
    step is not difficulty — it is a generated dead end. The count has to be 0. */
-function auditCampaign(campaign, postureIn, opts = {}){
+function auditCampaign(campaignIn, postureIn, optsIn = {}){
+  const campaign = obj(campaignIn);
+  const opts = obj(optsIn);
   const p = normalisePosture(postureIn);
   /* the posture carries what this situation cannot do, so a caller that forgot
      opts.forbidden still gets the honest answer rather than an optimistic one */
-  const forbidden = new Set(opts.forbidden || p.forbidden);
-  const vulnIndex = new Map((opts.vulns || []).map(v => [v.id, v]));
-  const rows = campaign.steps.map(st => {
+  const forbidden = new Set(arr(opts.forbidden).length ? arr(opts.forbidden).map(str)
+                                                       : p.forbidden);
+  const vulnIndex = new Map(arr(opts.vulns).map(obj).filter(v => !!v.id)
+                                           .map(v => [v.id, v]));
+  const rows = arr(campaign.steps).map(obj).map(st => {
     const ev = evadesPosture(st, p);
     const all = remediesForStep(st, p, vulnIndex);
     const ok = all.filter(r => !r.blocked && !forbidden.has(r.kind));
@@ -596,8 +661,8 @@ function applyRemedies(postureIn, moves){
   const patched = new Set(p.patched);
   let following = p.following;
   let rulesetTick = p.rulesetTick;
-  for(const m of moves || []){
-    const [kind, target] = String(m).split(':');
+  for(const m of arr(moves)){
+    const [kind, target] = str(m).split(':');
     if(kind === 'build') built.add(target);
     if(kind === 'follow'){ built.add('falcoctl'); following = true; }
     if(kind === 'update') rulesetTick = null;
@@ -615,7 +680,8 @@ const coverageOf = (campaign, postureIn) =>
   auditCampaign(campaign, postureIn).coverage;
 /* steps the node does not have a rule for yet */
 const staleMisses = (campaign, rulesetTick) =>
-  campaign.steps.filter(s => s.ruleSince && rulesetTick < s.ruleSince).map(s => s.id);
+  arr(obj(campaign).steps).map(obj)
+    .filter(s => s.ruleSince && num(rulesetTick) < s.ruleSince).map(s => s.id);
 
 export {
   PHASES,
@@ -625,6 +691,7 @@ export {
   intentById,
   POSTURE_DEFAULTS,
   normalisePosture,
+  postureErrors,
   WEIGHT,
   FAIRNESS,
   REMEDY_TEXT,

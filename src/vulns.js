@@ -54,6 +54,22 @@
  * the default package (INVARIANTS 4.1 / 4.5), or the lesson is a lie.
  */
 
+/* ---------------------------------------------------------------- totality
+   THIS MODULE NEVER THROWS. It returns an answer, or an empty one.
+
+   The contract (CONTRACT-datalayer.md §1) requires a bad input to come back as an
+   error value rather than an exception. Fuzzing the eight files found 27 sites
+   here — `vulnsFor(1)`, `triage(null)`, `patchCostAt()` — all of the same shape:
+   a collection argument that was not a collection. These four coercions are the
+   idiom, and every public entry runs its arguments through them.
+
+   `str()` absorbs Symbol too, which `String()` throws on. */
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+const num = (v, d = 0) => Number.isFinite(v) ? v : d;
+const str = v => typeof v === 'string' ? v
+               : (v == null || typeof v === 'symbol') ? '' : String(v);
+
 /* ---------------------------------------------------------------- severity
    Weight is what the game arithmetic uses; jp is what the player reads. The
    absolute numbers are illustrative and free to move. The ORDER is the claim. */
@@ -185,12 +201,12 @@ const MW_ALIASES = {
   'kernel':'old-kernel', 'oldkernel':'old-kernel', 'legacy-kernel':'old-kernel'
 };
 const mwId = id => {
-  const k = String(id || '').toLowerCase();
+  const k = str(id).toLowerCase();
   return MW_ALIASES[k] || k;
 };
 const mwById = id => MIDDLEWARE.find(m => m.id === mwId(id)) || null;
 const unknownMiddleware = ids =>
-  (ids || []).filter(x => !mwById(x)).map(String);
+  arr(ids).filter(x => !mwById(x)).map(str);
 
 /* ---------------------------------------------------------------- exploit route
    `detect` is what src/campaigns.js needs and it says two things:
@@ -504,17 +520,22 @@ function hash32(str){
   return h >>> 0;
 }
 function disclosureTick(vuln, seedIn = 1){
-  const [a, b] = vuln.discloseIn;
+  const v = obj(vuln);
+  const w = arr(v.discloseIn);
+  /* 窓が無い／壊れているものは tick 0 に落とします。**捨てません** —
+     カタログの記述漏れが「その脆弱性は存在しない」に化けるのが一番まずい */
+  const a = num(w[0]), b = num(w[1], a);
   const span = Math.max(1, (b - a) + 1);
-  return a + (hash32(`${vuln.id}#${seedIn}`) % span);
+  return a + (hash32(`${str(v.id)}#${num(seedIn, 1)}`) % span);
 }
 
 /* every vulnerability that exists for this middleware set, with its disclosure
    tick resolved. Sorted by when it lands, because that is the order the player
    meets them in. */
-function vulnsFor(mwIds, opts = {}){
-  const seedIn = opts.seed ?? 1;
-  const want = new Set((mwIds || []).map(mwId));
+function vulnsFor(mwIds, optsIn = {}){
+  const opts = obj(optsIn);
+  const seedIn = num(opts.seed, 1);
+  const want = new Set(arr(mwIds).map(mwId));
   return VULNS
     .filter(v => want.has(v.mw))
     /* `blocked` is resolved here rather than left to the caller, because
@@ -526,7 +547,8 @@ function vulnsFor(mwIds, opts = {}){
     .sort((x, y) => x.t - y.t || (x.id < y.id ? -1 : 1));
 }
 /* what is public by tick `tickNo` */
-const disclosedBy = (list, tickNo) => list.filter(v => v.t <= tickNo);
+const disclosedBy = (list, tickNo) =>
+  arr(list).map(obj).filter(v => num(v.t) <= num(tickNo));
 
 /* ---------------------------------------------------------------- cost
    COST RISES WITH TIME (GAME-DESIGN §4.5 指針). The longer a hole stays open the
@@ -547,19 +569,21 @@ const COST = {
   budgetPerTick: 1
 };
 function patchCostAt(vuln, tickNo = 0){
-  const mw = mwById(vuln.mw);
-  const base = (vuln.fix || (mw && mw.patch) || {downtime:1, asks:0, blocked:false});
-  const age = Math.max(0, (tickNo|0) - (vuln.t ?? 0));
+  const v = obj(vuln);
+  const mw = mwById(v.mw);
+  const base = obj(v.fix).downtime !== undefined ? obj(v.fix)
+             : (mw && mw.patch) || {downtime:1, asks:0, blocked:false};
+  const age = Math.max(0, Math.round(num(tickNo)) - num(v.t));
   const drift = Math.floor(age / COST.driftEvery) * COST.driftAdd;
   return {
-    downtime: base.downtime + drift,
-    asks: base.asks,
+    downtime: num(base.downtime, 1) + drift,
+    asks: num(base.asks),
     blocked: !!base.blocked,
     drift,
-    chain: (base.chain || []).slice(),
+    chain: arr(base.chain).slice(),
     jp: base.jp || '',
     /* one number the score lane can spend: 停止時間 ＋ 依頼 */
-    total: base.downtime + drift + base.asks
+    total: num(base.downtime, 1) + drift + num(base.asks)
   };
 }
 
@@ -580,10 +604,11 @@ const TRIAGE_TEXT = {
   sysdig:'<b>in-use のものだけが浮いている。</b>実行時に読み込まれていないものは下に落ちる —— '+
          '検知は1段も増えていない。<b>塞ぐ順が決まっただけ</b>。'
 };
-function triage(list, opts = {}){
+function triage(list, optsIn = {}){
+  const opts = obj(optsIn);
   const knows = opts.stack === 'sysdig';
-  const tickNo = opts.tick ?? 0;
-  const rows = list.map(v => ({
+  const tickNo = num(opts.tick);
+  const rows = arr(list).map(obj).map(v => ({
     id:v.id, mw:v.mw, code:v.code, jp:v.jp, sev:v.sev, t:v.t,
     /* the model still knows; the PLAYER only does on Sysdig */
     inUse: knows ? !!v.inUse : null,
@@ -604,9 +629,10 @@ function triage(list, opts = {}){
 /* Spend the budget in the order triage gave you. This is the function that
    turns "you cannot see in-use" into a number: `wasted` is budget spent on
    holes that were never reachable. */
-function patchPlan(list, opts = {}){
-  const tickNo = opts.tick ?? 0;
-  const budget = opts.budget ?? COST.budgetPerTick;
+function patchPlan(list, optsIn = {}){
+  const opts = obj(optsIn);
+  const tickNo = num(opts.tick);
+  const budget = num(opts.budget, COST.budgetPerTick);
   const { order, knowsInUse, ties } = triage(list, opts);
   let left = budget;
   const patch = [], skip = [];
@@ -616,10 +642,10 @@ function patchPlan(list, opts = {}){
     left -= row.cost.total;
     patch.push(row.id);
   }
-  const lookup = new Map(list.map(v => [v.id, v]));
-  const wasted = patch.filter(id => !lookup.get(id).inUse).length;
+  const lookup = new Map(arr(list).map(obj).map(v => [v.id, v]));
+  const wasted = patch.filter(id => !obj(lookup.get(id)).inUse).length;
   return { patch, skip, spent: budget - left, left, wasted,
-           inUsePatched: patch.filter(id => lookup.get(id).inUse).length,
+           inUsePatched: patch.filter(id => !!obj(lookup.get(id)).inUse).length,
            knowsInUse, ties };
 }
 
@@ -645,15 +671,17 @@ const PRESSURE = {
   maxLoadMul: 1.35,
   riskPerWeight: 1.0     // score lane: 減算 is proportional to 期間 × 深刻度
 };
-function vulnPressure(open, opts = {}){
-  const tickNo = opts.tick ?? 0;
-  const live = (open || []).filter(v => v.inUse);
+function vulnPressure(open, optsIn = {}){
+  const opts = obj(optsIn);
+  const tickNo = num(opts.tick);
+  const rows = arr(open).map(obj);
+  const live = rows.filter(v => v.inUse);
   const weight = live.reduce((a, v) => a + sevWeight(v.sev), 0);
   /* 放置は期間に比例して痛む (GAME-DESIGN §4.5 減算) */
-  const aged = (open || []).reduce(
-    (a, v) => a + sevWeight(v.sev) * Math.max(0, tickNo - (v.t ?? 0)), 0);
+  const aged = rows.reduce(
+    (a, v) => a + sevWeight(v.sev) * Math.max(0, tickNo - num(v.t)), 0);
   return {
-    open: (open || []).length,
+    open: rows.length,
     inUseOpen: live.length,
     weight,
     alertsPerMin: +(PRESSURE.alertsPerVuln * live.length).toFixed(3),
@@ -664,16 +692,17 @@ function vulnPressure(open, opts = {}){
 
 /* ---------------------------------------------------------------- rollup
    One call the UI page (§5.5 脆弱性一覧) and the score lane can both read. */
-function vulnState(opts = {}){
-  const tickNo = opts.tick ?? 0;
-  const all = vulnsFor(opts.middleware || [], opts);
-  const patched = new Set(opts.patched || []);
+function vulnState(optsIn = {}){
+  const opts = obj(optsIn);
+  const tickNo = num(opts.tick);
+  const all = vulnsFor(arr(opts.middleware), opts);
+  const patched = new Set(arr(opts.patched).map(str));
   const known = disclosedBy(all, tickNo);
   const open = known.filter(v => !patched.has(v.id));
   return {
     tick: tickNo,
-    middleware: (opts.middleware || []).map(mwId),
-    unknownMiddleware: unknownMiddleware(opts.middleware || []),
+    middleware: arr(opts.middleware).map(mwId),
+    unknownMiddleware: unknownMiddleware(arr(opts.middleware)),
     total: all.length,
     disclosed: known.length,
     patched: known.length - open.length,
