@@ -119,7 +119,15 @@ for(const [f, s] of Object.entries(src)){
  * scenario is pure data (scenarios/schema.js §purity) and the whole point is
  * that a new one needs no entry anywhere. The same property is what lets
  * scripts/regress.mjs run the game headless. */
-const DOM_FREE = ['campaign.js', 'state.js', 'layout.js',
+/* The eight data-layer modules are on the list before they land (the loop below
+   skips names it cannot find), so the DOM-free property is enforced by the same
+   run that first sees the file rather than by somebody remembering to add it.
+   That is GATE-FREEPLAY F2, and it closes BOARD D19 / #49. They are pure data by
+   contract — no imports at all — which is also what lets scripts/harness
+   /cases-freeplay.mjs read them straight from Node without the fake DOM. */
+const DATA_LAYER = ['archetypes.js', 'stages.js', 'versions.js', 'policies.js',
+                    'timeline.js', 'score.js', 'vulns.js', 'campaigns.js'];
+const DOM_FREE = ['campaign.js', 'state.js', 'layout.js', ...DATA_LAYER,
                   ...files.filter(f => f.startsWith('scenarios/'))];
 for(const f of DOM_FREE){
   if(!src[f]) continue;

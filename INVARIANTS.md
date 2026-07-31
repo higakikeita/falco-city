@@ -183,6 +183,28 @@ slow output の行だけモデルの真値（19.8%）になりました。6.3 �
 | 10.3 | ✅ **Sysdig の Legacy eBPF ドライバには日付がある。** Docs の Deprecation Notice が「This driver will be retired on **December 4, 2026**. We recommend migrating to Universal eBPF.」。カーネル下限も同じ表にある: **Universal eBPF ≥ 5.8**（ヘッダ不要）/ **kmod ≥ 3.10**（ヘッダ必要）/ **Legacy eBPF ≥ 4.14**（ヘッダ必要）。**発注書の「2026-12-04 廃止」はこれで正しい** — ただし **Sysdig の話**で、Falco の 10.2 とは別物 | [Sysdig: Understand Agent Drivers](https://docs.sysdig.com/en/sysdig-secure/classic-agent-drivers/) | 未実装 | 未実装（`versions.js` 待ち） |
 | 10.4 | ⚠️ **「`k8smeta` は Falco 0.40+ を要求」は現行プラグインについては正しく、「0.40 未満では `k8smeta` が使えない」は誤り。** README が「This plugin requires Falco with version >= **0.40.0**. For older Falco version (>= **0.37.0**) please use plugin version **0.2.x**」と両方書いています。**下限は2段**: どの `k8smeta` でも 0.37.0 以上、**現行（0.3.x 以降・最新 v0.4.1）**なら 0.40.0 以上 | [k8smeta plugin README §Running](https://github.com/falcosecurity/plugins/blob/main/plugins/k8smeta/README.md)／[k8smeta CHANGELOG](https://github.com/falcosecurity/plugins/blob/main/plugins/k8smeta/CHANGELOG.md)（v0.4.1） | 未実装 | 未実装（`versions.js` 待ち） |
 | 10.5 | ✅ **「上げると壊れる」の実体は 0.37.0（2024-01-30）**: 内蔵 Kubernetes クライアントが廃止され、旧 `k8s.*` フィールド（`k8s.pod.*` / `k8s.ns.name` を除く）が `<NA>` を返すようになった（§3.7）。**戻す手は `k8smeta` プラグイン ＋ `k8s-metacollector` を建てること**で、その下限が 10.4。**V6（バージョンを上げて何かが壊れ、戻す手がある）はこの1件だけで成立します** | §3.7 と同じ（[Introducing Falco 0.37.0](https://falco.org/blog/falco-0-37-0/)） | `src/districts.data.js` の k8smeta 軸（版と結びついていない） | 4軸は直交（現行）／版との連動は `versions.js` 待ち |
+| 10.6 | ✅ **0.44.0 で消えたのは legacy eBPF だけではない。** 同じ版で **gRPC 出力とサーバ**も落ちています（`chore!: drop gRPC output and server support` #3798・こちらも `!`）。0.43.0 の非推奨は3点セット（legacy eBPF プローブ / gVisor エンジン / gRPC）で、**0.44.0 がその回収**。**「上げると何かが無くなる」は1件の事故ではなく、この版の性格です** | [Falco CHANGELOG v0.44.0](https://github.com/falcosecurity/falco/blob/master/CHANGELOG.md)（#3798）／同 v0.43.0（#3763） | `src/versions.js` §CLAIMS `grpc-gvisor-removal-0.44`（データ層が独立に到達・出典一致） | 版に関する主張の出典が INVARIANTS に解決する |
+
+### データ層の主張との対応（`src/versions.js` §CLAIMS の `invariant` に入れる番号）
+
+`versions.js` は主張ごとに `invariant:` を持っていて、**登録済みのものはその番号を指します**。
+2026-07-31 時点で登録できたのは次の5件です（`cases-freeplay.mjs` が毎回突き合わせます）:
+
+| `CLAIMS.id` | INVARIANTS |
+|---|---|
+| `release-dates` | **10.1** |
+| `falco-legacy-ebpf-removal` | **10.2** |
+| `sysdig-legacy-ebpf-retirement` | **10.3** |
+| `k8smeta-plugin-min-version` | **10.4** |
+| `grpc-gvisor-removal-0.44` | **10.6** |
+| `falco-0.37-k8s-client` | 3.7（既登録）|
+| `driver-kernel-requirements` | 3.3（既登録）|
+
+**まだ登録していないもの**（データ層が出典を持っているが、このレーンが一次資料で確認していない）:
+`kernel-minimum-not-strict` / `default-ruleset-shrank-at-0.36` / `plugin-abi-0.35` / `cri-config-move` /
+`container-plugin-0.41` / `evt-dir-0.42` / `driver-api-bump-0.44`。
+**`npm test` が毎回この未登録一覧を出します。** 確認したものから順に §10 に足します
+（`BOARD.md` §2 の `I<n>` 行が受け口）。
 
 ### 進行の設計に対する含意（**設計はこのレーンの持ち物ではないので、事実だけ**）
 

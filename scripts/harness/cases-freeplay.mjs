@@ -98,28 +98,40 @@ when(vers, 'バージョンのリリース日が一次資料と一致する（§
   return `${checked.length} 本が一致（${checked.join(' / ')}）· ${falco.length} 段が時間順`;
 });
 
-const drv = need('versions', 'DRIVERS');
+const drv = need('versions', 'DRIVER_LIFECYCLE', 'driverById');
 when(drv, 'legacy eBPF は Falco では版で消え、Sysdig では日付で消える（§10.2 / §10.3）', m => {
-  const all = Object.values(m.DRIVERS ?? {}).flat?.() ?? m.DRIVERS;
-  const list = Array.isArray(all) ? all : Object.values(all || {});
-  const byVersion = list.filter(d => d && d.removedIn);
-  const byDate    = list.filter(d => d && d.retiredOn);
-  assert(byVersion.length > 0, 'removedIn（版で消える）を持つドライバが1つも無い');
-  assert(byDate.length > 0, 'retiredOn（日付で消える）を持つドライバが1つも無い');
-  assert(byVersion.some(d => d.removedIn === FALCO_LEGACY_EBPF_REMOVED_IN),
+  const list = Array.isArray(m.DRIVER_LIFECYCLE)
+    ? m.DRIVER_LIFECYCLE : Object.values(m.DRIVER_LIFECYCLE || {});
+  assert(list.length, 'ドライバの一覧が空');
+  /* Falco 側: 版で消える。日付は持たない */
+  const falcoLegacy = list.filter(d => d && d.line === 'falco' && d.removedIn);
+  assert(falcoLegacy.length > 0, 'removedIn（版で消える）を持つ Falco のドライバが無い');
+  assert(falcoLegacy.some(d => d.removedIn === FALCO_LEGACY_EBPF_REMOVED_IN),
     `Falco の legacy eBPF が ${FALCO_LEGACY_EBPF_REMOVED_IN} で削除されることになっていない`
-    + `（実装は ${byVersion.map(d => d.removedIn).join(' / ')}）`);
+    + `（実装は ${falcoLegacy.map(d => `${d.id}:${d.removedIn}`).join(' / ')}）`);
+  /* Sysdig 側: 日付で消える。版は持たない */
+  const byDate = list.filter(d => d && d.retiredOn);
   assert(byDate.some(d => d.retiredOn === SYSDIG_LEGACY_EBPF_RETIRED_ON),
     `Sysdig の legacy eBPF の廃止日が ${SYSDIG_LEGACY_EBPF_RETIRED_ON} になっていない`
-    + `（実装は ${byDate.map(d => d.retiredOn).join(' / ')}）`);
-  /* そして混ざっていないこと。1つの項目が版と日付の両方を持っていたら、
-     2つのクロックが1つに潰れている */
+    + `（実装は ${byDate.map(d => `${d.id}:${d.retiredOn}`).join(' / ')}）`);
+  /* そして1つの項目が両方を持たないこと。持っていたら2つのクロックが1つに
+     潰れていて、「上げれば消える」と「日付が来れば消える」を混同している */
   const both = list.filter(d => d && d.removedIn && d.retiredOn);
   assert(both.length === 0,
     `${both.map(d => d.id).join(' / ')} が版と日付の両方で消えることになっている`
     + ' —— Falco と Sysdig の廃止は別のクロック（§10.2 / §10.3）');
-  return `版で消える ${byVersion.length} 件（Falco: ${FALCO_LEGACY_EBPF_REMOVED_IN}）· `
-       + `日付で消える ${byDate.length} 件（Sysdig: ${SYSDIG_LEGACY_EBPF_RETIRED_ON}）· 混在なし`;
+  /* 締切として並べたときも、2つが同じ日に潰れていないこと */
+  if(typeof m.deadlines === 'function'){
+    const ds = m.deadlines({}) || [];
+    const owners = new Set(ds.map(d => d.owner).filter(Boolean));
+    if(owners.size > 1){
+      const dates = new Set(ds.map(d => d.endsOn).filter(Boolean));
+      assert(dates.size > 1,
+        `締切が ${[...dates].join(' / ')} の1つに潰れている —— 持ち主が ${[...owners].join(' / ')} で違う`);
+    }
+  }
+  return `Falco: 版で消える（${falcoLegacy.map(d => `${d.id} → ${d.removedIn}`).join(' / ')}）· `
+       + `Sysdig: 日付で消える（${byDate.map(d => `${d.id} → ${d.retiredOn}`).join(' / ')}）· 混在なし`;
 });
 
 const plg = need('versions', 'PLUGINS');
@@ -277,8 +289,10 @@ const FAKE_CHAIN = [
 ];
 
 when(cmp, '同じシードなら同じキャンペーンが出る（F5）', m => {
+  /* posture.caps は capability 名の配列（campaigns.js §normalisePosture）。
+     オブジェクトの map を渡すと new Set(...) が投げる —— BOARD に出した */
   const opts = {chain:FAKE_CHAIN, tick:7, seed:12345,
-                posture:{caps:{kernelPath:true, apiServer:true}}};
+                posture:{caps:['kernelPath','apiServer']}};
   const a = JSON.stringify(m.generateCampaign(opts));
   const b = JSON.stringify(m.generateCampaign({...opts}));
   assert(a === b, '同じシード・同じ tick で違うキャンペーンが出た（F5 が破れている）');
@@ -295,7 +309,7 @@ when(cmp, '同じシードなら同じキャンペーンが出る（F5）', m =>
 });
 
 when(cmp, '生成された攻撃には必ず打つ手がある（F6）', m => {
-  const posture = {caps:{kernelPath:true, apiServer:true}};
+  const posture = {caps:['kernelPath','apiServer']};
   const bad = [];
   for(let seed = 1; seed <= 40; seed++){
     for(const tick of [0, 5, 20]){
@@ -349,13 +363,17 @@ when(arc, '4業種で主役のレバーが分かれている', m => {
   const A = m.ARCHETYPES;
   assert(A.length >= 4, `業種が ${A.length} しかない`);
   const levers = A.map(a => [a.id, m.starLever(a)]);
-  for(const [id, l] of levers)
+  for(const [id, l] of levers){
     assert(l, `${id} に主役のレバーが宣言されていない`);
-  const distinct = new Set(levers.map(([, l]) => l));
+    assert(l.star && l.why, `${id} の主役のレバーに名前か理由が無い`);
+  }
+  /* 同一性ではなく **キーで** 数える。オブジェクトを Set に入れると
+     参照が違うだけで「4種類」になり、検査が意味を失う */
+  const distinct = new Set(levers.map(([, l]) => l.key || l.star));
   assert(distinct.size >= 3,
     `4業種の主役が ${distinct.size} 種類しかない（${[...distinct].join(' / ')}）`
     + ' —— 業種差が演出になっている');
-  return levers.map(([id, l]) => `${id}=${l}`).join(' · ');
+  return levers.map(([id, l]) => `${id}=${l.star}(${l.key})`).join(' · ');
 });
 
 const ineff = need('archetypes', 'ARCHETYPES', 'starLever', 'isIneffective');
@@ -363,9 +381,17 @@ when(ineff, '主役でないレバーは、その業種では効かないと宣�
   const lines = [];
   for(const a of m.ARCHETYPES){
     const star = m.starLever(a);
-    assert(!m.isIneffective(a, star),
-      `${a.id}: 主役のレバー ${star} が「効かない」に入っている`);
-    lines.push(`${a.id}: ${star} は効く`);
+    assert(!m.isIneffective(a, star.star),
+      `${a.id}: 主役のレバー ${star.star} が「効かない」に入っている`);
+    /* 効かないと宣言されたものが本当に効かない側にあること。空なら
+       「業種ごとに主役が変わる」の裏返しが宣言されていない */
+    const dead = star.ineffective || [];
+    assert(dead.length > 0,
+      `${a.id}: 効かないレバーが1つも宣言されていない —— 主役 ${star.star} の`
+      + '「他は効かない」が言えていない');
+    for(const d of dead)
+      assert(m.isIneffective(a, d), `${a.id}: ${d} が isIneffective で効かない扱いになっていない`);
+    lines.push(`${a.id}: ${star.star} は効く / ${dead.join(',')} は効かない`);
   }
   return lines.join(' · ');
 });
