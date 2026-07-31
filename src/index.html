@@ -636,6 +636,14 @@ body.condocked #tour::-webkit-scrollbar{display:none}
     <div class="hudrow"><span>rules evaluated</span><b class="dark" id="mRules">—</b></div>
     <div class="hudrow"><span>alerts / min</span><b class="dark" id="mAlert">—</b></div>
     <div class="hudrow"><span>drain utilisation</span><b class="dark" id="mUtil">—</b></div>
+    <!-- The SECOND queue, and the second way to lose. The ring buffer is the one
+         with a counter on it; alerts land in a human queue that has a rate too,
+         and `buried` is the share of real detections that queue loses. Scoring
+         now depends on it (goal.maxBuriedPct), so a player who can see `drops`
+         and not this one is being scored on something the instruments do not
+         report — GAME-DESIGN §5.5 lists it as required on the operations
+         screen. Computed by state.js noise(), same as the scoring reads. -->
+    <div class="hudrow"><span>alerts buried</span><b class="dark" id="mBuried">—</b></div>
     <div class="verdict" id="mVerdict">—</div>
     <!-- NODE LOAD rides inside the HUD instead of owning a panel. It is an input
          to everything above it, so it reads correctly here, and at 1280x720 the
