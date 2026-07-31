@@ -71,4 +71,7 @@ html = sub(html, '<title>',
 
 mkdirSync(dirname(OUT), {recursive:true});
 writeFileSync(OUT, html);
+/* Pages via Actions does not run Jekyll, but keep this so a plain
+   `docs/`-served setup or a local static server behaves the same. */
+writeFileSync(resolve(dirname(OUT), '.nojekyll'), '');
 console.log(`wrote ${OUT}  (${(html.length/1024/1024).toFixed(2)} MB, no ES modules, no CDN for three)`);
