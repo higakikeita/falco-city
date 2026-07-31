@@ -2,11 +2,12 @@
 import { C } from './palette.js';
 import { DISTRICTS, byId, isFlow, ST } from './layout.js';
 import { ENV_AXES, ENV_SEL, DRIVERS, DEPLOY_PRESETS, DEPLOYMENTS,
-         CLUSTER_NODES, currentEnv, setEnvAxis } from './districts.data.js';
+         CLUSTER_NODES, NODE_CPUS, nodeCpus, setNodeCpus, bufferCount,
+         currentEnv, setEnvAxis } from './districts.data.js';
 import { S, GAME, TUNE_DEFAULTS, PRESET_MIB, model } from './state.js';
 import { districtObjs } from './city.js';
 import { ringRefs, outRefs, stateRefs, deployRefs, driverSlabs, sysdigGroup,
-         applyEnvironment } from './districts.build.js';
+         applyEnvironment, applyCpus } from './districts.build.js';
 import { spawn, spawnPolicy, polMat, PN, N } from './sim.js';
 import { revive } from './log.js';
 import { updateTags, updateVerdict, tagEls, select, closeDrawer } from './ui.js';
@@ -107,6 +108,14 @@ function applyEnv(){
   const named = DEPLOYMENTS.find(d => d.id === env.wire);
   if(named) S.env = named.env;
   S.nodes = env.topology === 'cluster' ? CLUSTER_NODES : (env.kernelPath ? 1 : 0);
+  /* CPUs on this node — the number the buffer count is derived from. The
+     scenario schema does not carry it yet (L1 is adding it), so this is the
+     seam: the moment a scenario hands over a per-node CPU count on S, both the
+     TUNING label and the ring district's lanes follow it with no further edit.
+     Undefined today, which leaves the declared default in place. Falling back
+     to NODE_CPUS rather than leaving the last value keeps it stateless — a
+     scenario on a 2-vCPU node must not leak that onto the next one. */
+  setNodeCpus(Number.isInteger(S.cpus) ? S.cpus : NODE_CPUS);
 
   const kp = env.kernelPath;
   setDim(districtObjs.driver.group,    kp ? 1 : 0.07);
@@ -290,12 +299,7 @@ loadRange.oninput = ()=>{
   onTuneChange();
 };
 
-/* ---------- tuning panel ----------
-   The ring district draws one lane per CPU, and the model is written against
-   that count. Buffers are derived from it, never from the node count: adding
-   nodes adds DaemonSet pods, it does not add buffers to the nodes you had. */
-const RING_CPUS = 8;
-
+/* ---------- tuning panel ---------- */
 const BUF_LBL = document.getElementById('tBufV');
 const SET_LBL = document.getElementById('tSetV');
 const CPU_LBL = document.getElementById('tCpuV');
@@ -339,7 +343,17 @@ function onTuneChange(){
      is the size of one buffer (which the kernel double-maps, so it costs 2×) */
   BUF_LBL.textContent = `${t.bufPreset} · ${PRESET_MIB(t.bufPreset)} MiB/buffer`;
   SET_LBL.textContent = t.syscallSet === 'custom' ? 'custom_set' : t.syscallSet;
-  CPU_LBL.textContent = `${t.cpusPerBuf} CPU/buffer → ${Math.ceil(RING_CPUS/t.cpusPerBuf)} buffers`;
+  /* Derived from the DECLARED CPU count of the node you are standing on, never
+     from a literal. This label used to read "2 → 4 buffers" on every node in
+     every environment, which is a units error the model was teaching and which
+     contradicts the nodes-are-not-buffers diagnosis outright: on the 2-vCPU
+     node that scenario puts you on, the default 2 gives ceil(2/2) = 1 buffer,
+     not 4. Saying the vCPU count out loud is the point — it is the number the
+     player has to notice, and the one nothing else on screen was showing. */
+  const cpus = nodeCpus();
+  const bufs = bufferCount(t.cpusPerBuf, cpus);
+  CPU_LBL.textContent =
+    `${t.cpusPerBuf} CPU/buffer × ${cpus} vCPU → ${bufs} buffer${bufs===1?'':'s'}`;
   revive();
   applyTuneVisuals();
   updateVerdict(model());     // don't wait for the next HUD tick
@@ -348,6 +362,10 @@ function onTuneChange(){
 /* reshape the ring buffer district so the config is visible in the model */
 function applyTuneVisuals(){
   const t = S.tune;
+  /* how many lanes there are at all. Cheap when the count has not moved, and
+     it has to run here so the district can never be drawing a different
+     machine from the one the label above is describing. */
+  applyCpus();
   // buffer size → depth of the shared-memory volume and the lane walls
   const s = 0.45 + (t.bufPreset-1) * 0.30;
   if(ringRefs.shm){
