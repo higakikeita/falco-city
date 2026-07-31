@@ -25,10 +25,17 @@
 | 1.1 | ✅ ドロップはリングバッファでだけ起きる（唯一落ちる場所） | [Falco: Dropping events](https://falco.org/docs/troubleshooting/dropping/) | `src/sim.js` ring 区間 | 既定構成は syscall → ring → rules → alert が流れる |
 | 1.2 | ✅ 持続的な入力超過で失う割合は `1 - 消費能力/入力` | 定義（待ち行列の飽和） | `src/state.js:66` `sustained` | 持続超過で失う割合は 1 - 消費能力/入力 |
 | 1.3 | ✅ `buf_size_preset` はバーストにだけ効く。持続超過には効かない | [falco.yaml `buf_size_preset`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)（1–10 = 1MB–512MB・既定 4 = 8MB）／[Dropping events](https://falco.org/docs/troubleshooting/dropping/)「Increasing the size helps, but keep in mind that the benefits may not increase proportionally」 | `src/state.js:68` `burst` のみ `bufPreset` に依存 | buf_size_preset はバーストに効く／持続超過に効かない（1–10 全段で `sustained` 同一） |
-| 1.4 | ⚠️ `cpus_for_each_buffer` は CPU とバッファの対応を決める（modern_ebpf のみ・既定 2 = 1バッファ:2CPU・`1` で CPU ごと・`0` で全 CPU 共有1つ）。**ただし「1 にすると消費能力が上がる」は Docs の推奨と逆向き**: ドロップ対策として Docs は `cpus_for_each_buffer` を **4–6 に上げて** preset 6–7 と組ませることを勧めている（バッファを細かくするより、少なく大きくする） | [falco.yaml `engine.modern_ebpf.cpus_for_each_buffer`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)（対応）／[Dropping events](https://falco.org/docs/troubleshooting/dropping/)（推奨値） | `src/state.js:60` `cap` | cpus_for_each_buffer を 1 にすると消費能力が上がる（**現行モデルの向き。要判断**） |
+| 1.4 | ✅ `cpus_for_each_buffer` は CPU とバッファの対応を決める（modern_ebpf のみ・既定 2 = 1バッファ:2CPU・`1` で CPU ごと・`0` で全 CPU 共有1つ）。**上げる（＝バッファを少なく大きくする）方向で消費能力が上がる。** ドロップ対策として Docs は `cpus_for_each_buffer` を **4–6 に上げて** preset 6–7 と組ませることを勧めている。細かく割るほど単一のコンシューマがポーリングする対象が増えるので、バッファ数が減る方向に能力が上がる（`BUF_CAP`・polling オーバーヘッドの項なので効き幅は控えめ） | [falco.yaml `engine.modern_ebpf.cpus_for_each_buffer`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)（対応）／[Dropping events](https://falco.org/docs/troubleshooting/dropping/)（推奨値） | `src/state.js` `BUF_CAP` → `drainCap()` | cpus_for_each_buffer を上げる（バッファを減らす）と消費能力が上がる（1–8 で単調・入力は不変） |
 | 1.5 | ✅ 出力が詰まるとイベントループが止まり、その間にリングバッファが埋まる。**syscall 量が普通でもドロップする**。`outputs_queue.capacity`（既定 0 = 無制限）を設定すると、止まる代わりに**アラート側が捨てられて**ループが続く | [falco.yaml `outputs_queue.capacity`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「the current event would be dropped, and the event loop would continue」／同 `output_timeout`「if an output channel becomes blocked indefinitely, it indicates a potential issue」 | `src/state.js:63` `slowOutput` | slow output は syscall 量が普通でもドロップさせる |
 | 1.6 | ✅ `syscall_event_drops.actions` は `ignore` / `log` / `alert` / `exit`。`exit` はエージェントを止める＝検知が本当にゼロになる | [falco.yaml `syscall_event_drops`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)（既定 `[log, alert]`・`rate: .03333`・`max_burst: 1`） | `src/log.js:59` `onDrop` / `die` | exit は検知を本当にゼロにする／ignore は黙って盲目になる |
 | 1.7 | ✅ ドライバの選択はドロップの**向き**を変えない（消費能力の係数が違うだけ） | [Falco: kernel drivers](https://falco.org/docs/concepts/event-sources/kernel/) | `src/state.js:61-62` | ドライバの差はドロップの向きを変えない |
+
+> **【2026-07-31 · 1.4 の向きを反転】** モデルは `1` にすると消費能力が上がる（バッファを細かく
+> 割るほど良い）と言っていました。これは Docs の推奨と逆向きで、⚠️ として記録されていたものです。
+> 「因果は本物でなければならない」が上位なので、**モデルを Docs に合わせて反転**しました
+> （L1 実装済み・ハーネスの主張も反転済み）。**README の実測表8行はバイト単位で不変**です
+> （既定ノードは `cpus_for_each_buffer = 2` ＝ `cap 1.55` のままで、動いたのは既定から外した
+> ときの向きだけ）。ハーネスは `cpus 1 < 既定 2 < cpus 6` を両方向に固定しています。
 
 ## 2. `base_syscalls` — ここは主張を1つ直す必要がある
 
@@ -37,10 +44,10 @@
 | 2.1 | ✅ トレースする集合は「**有効なルールが要求する syscall** ∪ base set」。ルール側の要求は常に入る | [falco.yaml `base_syscalls.custom_set`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「Custom set of syscalls to trace **in addition to the ones required by enabled rules**」／[Adaptive Syscalls Selection](https://falco.org/blog/adaptive-syscalls-selection/)「the union of two components: the base set … and the syscalls specified in the loaded rules」 | — | — |
 | 2.2 | ✅ 絞ると流入量が減る（＝持続超過に効く唯一のレバー） | [Dropping events](https://falco.org/docs/troubleshooting/dropping/)「limit the syscalls under monitoring」 | `src/state.js:36` `SET_MUL` | base_syscalls を絞ると持続超過が止まる |
 | 2.3 | ⚠️ **「`custom_set` に絞ると検知が落ちる」は、そのままでは成立しない。** 既定の `custom_set`（正の記法）はルールが要求する syscall を落とさないので、有効なルールのカバレッジは減らない | 2.1 と同じ | `src/state.js` `syscallCustom`（記録のみ・採点しない） | **正の custom_set は有効なルールのカバレッジを奪えない**（回帰として固定済み）／GAP 6.1 |
-| 2.4 | ✅ 検知を落とすのは**負の記法**。`!<syscall>` は「**ルールセットで使われていても**その syscall を無効化する」。Docs は「除外は `custom_set` ではなくルール側で消せ」と推奨している | [Adaptive Syscalls Selection](https://falco.org/blog/adaptive-syscalls-selection/)「to deactivate a syscall even if it is used in the ruleset」 | `TUNE_DEFAULTS.syscallCustom` に `!x` として持てる（採点は未実装） | 盲点を作れるのは負の指定か repair:false — 記法は区別して持たれている／GAP 6.4 |
-| 2.5 | ✅ `repair: true` が戻すのは**状態エンジンの整合性だけ**（`close` / `procexit` などの最小追加）。**意図的に外したルールのカバレッジは戻らない** | [falco.yaml `base_syscalls.repair`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「the minimal set of additional syscalls needed to properly build up (e.g. 'repair') its state engine and life-cycle management」 | `TUNE_DEFAULTS.syscallRepair`（採点は未実装） | 同上／GAP 6.4 |
+| 2.4 | ✅ 検知を落とすのは**負の記法**。`!<syscall>` は「**ルールセットで使われていても**その syscall を無効化する」。Docs は「除外は `custom_set` ではなくルール側で消せ」と推奨している | [Adaptive Syscalls Selection](https://falco.org/blog/adaptive-syscalls-selection/)「to deactivate a syscall even if it is used in the ruleset」 | **採点済み**（2026-07-31）: `blindSyscalls()` → `evaluate()` の `blind` 原因。ルールが要求する syscall が**全部**無効化されたときだけ盲点になる（1つ残れば鳴る） | 負の指定は盲点を作り、それはドロップとして計測されない／記法は区別して持たれている |
+| 2.5 | ✅ `repair: true` が戻すのは**状態エンジンの整合性だけ**（`close` / `procexit` などの最小追加）。**意図的に外したルールのカバレッジは戻らない** | [falco.yaml `base_syscalls.repair`](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「the minimal set of additional syscalls needed to properly build up (e.g. 'repair') its state engine and life-cycle management」 | `TUNE_DEFAULTS.syscallRepair`（**意図的に未採点** — 検知の枚数として表現するものではない。GAP 6.4） | 記法は区別して持たれている／GAP 6.4 |
 | 2.6 | ✅ 絞りすぎると**プロセスキャッシュテーブルを GC できない／ログが不完全になる**（＝状態エンジンの劣化。これが `repair` の存在理由） | [falco.yaml](https://github.com/falcosecurity/falco/blob/master/falco.yaml)「misconfiguration may result in incomplete logs or inability to garbage collect the process cache table」 | 未実装 | — |
-| 2.7 | ✅ base set から外した syscall は**実行時のカウンタに出ない**（`syscall_event_drops` は上がらない）。ただし**起動時には列挙できる**: `-o log_level=debug -o log_stderr=true --dry-run` が最終集合を出力し、重い syscall を除外すると警告が出る | [Adaptive Syscalls Selection](https://falco.org/blog/adaptive-syscalls-selection/)「(72) syscalls selected in total (final set): …」 | — | — |
+| 2.7 | ✅ base set から外した syscall は**実行時のカウンタに出ない**（`syscall_event_drops` は上がらない）。ただし**起動時には列挙できる**: `-o log_level=debug -o log_stderr=true --dry-run` が最終集合を出力し、重い syscall を除外すると警告が出る | [Adaptive Syscalls Selection](https://falco.org/blog/adaptive-syscalls-selection/)「(72) syscalls selected in total (final set): …」 | `evaluate()` の `blind` は `dropP` / `util` を一切動かさない | 負の指定は盲点を作り、それはドロップとして計測されない（盲点があっても drop 0% · util 健全であることを固定） |
 | 2.8 | ✅ ファイル読み取り系の検知は `open` / `openat` / `openat2` に依存する（マクロ `open_read`）。ここを外すと「Read sensitive file untrusted」は鳴らない | [falcosecurity/rules `falco_rules.yaml`](https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml) マクロ `open_read`／[Dropping events](https://falco.org/docs/troubleshooting/dropping/) Test 5 が `open,openat,openat2,close` を「file operations」として括っている | `src/campaign.js` step2 | — |
 | 2.9 | ⚠️ 「高頻度 syscall を絞ると**最初に**死ぬのは openat 系」という**順序の主張は Docs に無い**。Docs にあるのは「どのルールがどの syscall を要求するか」だけ。順序ではなく依存で語ること | 同上 | — | — |
 
@@ -65,11 +72,11 @@
 
 | # | 主張 | 出典 | 実装 | テスト |
 |---|---|---|---|---|
-| 4.1 | ✅ 既定で読み込まれるのは **stable のみ**。incubating / sandbox は別の OCI アーティファクト（`falco-incubating-rules` / `falco-sandbox-rules`）を入れる | [Default Rules](https://falco.org/docs/reference/rules/default-rules/)「By default, only the `stable` rules are loaded by Falco」 | `src/campaign.js` falcoctl 地区 | — |
+| 4.1 | ✅ 既定で読み込まれるのは **stable のみ**。incubating / sandbox は別の OCI アーティファクト（`falco-incubating-rules` / `falco-sandbox-rules`）を入れる。**ファイル構成そのものが裏付け**: `falcosecurity/rules` は成熟度とファイルが 1:1 で、`rules/falco_rules.yaml`（stable 25本）/ `rules/falco-incubating_rules.yaml`（incubating 31本）/ `rules/falco-sandbox_rules.yaml`（sandbox 37本）に分かれている。**incubating / sandbox は `falco_rules.yaml` に1本も無い** — つまり「既定で入っているか」はフラグではなく**どのファイルを取得したか** | [Default Rules](https://falco.org/docs/reference/rules/default-rules/)「By default, only the `stable` rules are loaded by Falco」／[falcosecurity/rules `rules/`](https://github.com/falcosecurity/rules/tree/main/rules)（3ファイル構成） | `src/campaign.js` falcoctl 地区 ＋ `scripts/harness/cases.mjs` §RULE_MATURITY | チェーンの各段のルールは成熟度が分かっている／同梱されないルールだけが 09 ルール配布を要求する |
 | 4.2 | ✅ Helm の3キーは別物: `artifact.install.refs`（起動時に取る）/ `artifact.follow.refs`（自動更新する）/ `falco.rules_files`（エンジンに読ませる） | [Default Rules](https://falco.org/docs/reference/rules/default-rules/) | README | — |
-| 4.3 | ⚠️ **攻撃チェーン step4「/tmp に落としたバイナリを実行する」の理由が間違っている。** `Drop and execute new binary in container` は `tags: [maturity_stable, …]` なので**既定で入っている**。falcoctl 無しでも検知できる | [falcosecurity/rules `falco_rules.yaml`](https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml) | `src/campaign.js` CHAIN step4 `needs:['…','falcoctl']` | 既定同梱のルールセットに無い検知は falcoctl なしでは持てない（**主張自体は正しいが、例が誤り**） |
-| 4.4 | ✅ 現行チェーンの4ルール（Terminal shell in container / Read sensitive file untrusted / Write below etc / Contact K8S API Server From Container）は**すべて stable**＝既定で入っている | 同上 | — | — |
-| 4.5 | ✅ falcoctl の例に使えるのは incubating の実物: `Contact EC2 Instance Metadata Service From Container`（IMDS からの資格情報窃取）/ `Exfiltrating Artifacts via Kubernetes Control Plane` / `Backdoored library loaded into SSHD (CVE-2024-3094)` | [falco-incubating_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-incubating_rules.yaml) | 未実装（4.3 の差し替え候補） | — |
+| 4.3 | ⚠️ **成熟度の取り違えは1件ではなく2件で、向きが逆だった。** ①step4「/tmp に落としたバイナリを実行する」＝`Drop and execute new binary in container` は `maturity_stable` ＝**同梱されている**のに falcoctl を要求していた（**修正済み** — `imds` 段が falcoctl の主張を引き受け、step4 は素の stable 検知になった）。②step3「/etc/cron.d に書き込む」＝`Write below etc` は `maturity_sandbox` ＝**同梱されていない**のに、既定で鳴る扱いになっている（**未修正** — コンテナレーンが step3 ↔ step4 の入れ替えで両方同時に直す。id `cron` / `dropbin` は6シナリオが `attack.waves` から参照しているので据え置き） | [falcosecurity/rules `falco_rules.yaml`](https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml)（stable にあるもの）／[falco-sandbox_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-sandbox_rules.yaml)（`Write below etc`） | `src/campaign.js` CHAIN `cron`（falcoctl を要求していない）／`imds`（要求する） | 同梱されないルールだけが 09 ルール配布を要求する（`cron` は `MATURITY_PENDING` で保留）／GAP 6.6 |
+| 4.4 | ⚠️ **訂正**: 「現行チェーンの4ルールはすべて stable」は**誤り**。`Write below etc` は **`maturity_sandbox`**（`falco-sandbox_rules.yaml`）。stable なのは `Terminal shell in container` / `Read sensitive file untrusted` / `Contact K8S API Server From Container` の3本と、4.3 で入れ替わった `Drop and execute new binary in container` | 同上 | `scripts/harness/cases.mjs` §RULE_MATURITY が段ごとの成熟度を持つ | チェーンの各段のルールは成熟度が分かっている（未登録のルールを増やすと赤くなる） |
+| 4.5 | ✅ falcoctl の例に使えるのは incubating の実物: `Contact EC2 Instance Metadata Service From Container`（IMDS からの資格情報窃取）/ `Exfiltrating Artifacts via Kubernetes Control Plane` / `Backdoored library loaded into SSHD (CVE-2024-3094)` | [falco-incubating_rules.yaml](https://github.com/falcosecurity/rules/blob/main/rules/falco-incubating_rules.yaml) | **実装済み**: `CHAIN` の `imds` 段が `Contact EC2 Instance Metadata Service From Container` で `needs` に `falcoctl` を含む | 既定同梱のルールセットに無い検知は falcoctl なしでは持てない（`imds`=incubating）／同梱されないルールだけが 09 ルール配布を要求する |
 
 ## 5. OSS と Sysdig の境界
 
@@ -89,11 +96,13 @@
 
 | # | GAP | いまの挙動 | あるべき因果 | 予定 |
 |---|---|---|---|---|
-| 6.1 | 🕳 `custom_set` の代償が採点に無い | 過負荷 6/7 → `custom_set` で **7/7**。絞るだけで満点が戻る（ルールに届く量は 60% 減っているのに無償） | 2.3 のとおり「絞る」だけでは検知は落ちない。**落とすなら負の記法（2.4）か `repair:false`（2.6）としてモデル化する** | Phase 1 |
+| 6.1 | 🕳 `custom_set` の代償が採点に無い | 過負荷 6/8 → `custom_set` で **8/8**。絞るだけで満点が戻る（ルールに届く量は 60% 減っているのに無償）。**ノイズ（§9）が入って「絞る」は SOC のキューにも効くようになったので、絞る手はいま二重に得** | 2.3 のとおり「絞る」だけでは検知は落ちない。**落とすなら負の記法（2.4・実装済み）としてモデル化する**。量の側は 6.7 | Phase 1 |
 | 6.2 | ✅ **閉じた**（2026-07-31・環境の直交4軸で解消） | 旧: `deploy=plugins` で 6/7。採点が syscall 段を検知扱いにしていた | `needsCaps:['kernelPath']` になり、kernel-less では syscall 段が全部落ちる（3.10）。serverless は 2/7 | 済 — 回帰テストに昇格済み |
 | 6.3 | 🕳 HUD のドロップ率が実際より低く出る | モデル 38.72% に対し HUD は **27.91%**。`src/ui.js` が `drop/(ring+drop)` を使っているが、ドロップ済みイベントは `ring` にも数えられているので分母が二重（表示値 = `p/(1+p)`） | 分母は `ring` だけ。README §実測した挙動 の数値もこの式で書かれている | Phase 1 |
-| 6.4 | 🕳 負の `custom_set` と `repair:false` に代償が無い | `custom_set: [!openat, !openat2, !execve]` でも `repair: false` でも検知は 7/7 のまま。正の `custom_set` が流入量を増やさないのも同じ穴（`SET_MUL` はプリセット名しか読まない） | 2.4 / 2.5 のとおり、**盲点を作れるのはこの2つだけ**。6.1 の代償はここに置く | Phase 1 |
-| 6.5 | 🕳 シナリオの `attack.waves` の境界が使われていない | `stepsOf()` が flatten して1回で流す。波は宣言されているが engine は境界で何もしない | ウェーブごとに区切って提示する（`schema.js` §attack.waves のコメントどおり） | Day 2（別レーン進行中） |
+| 6.4 | 🕳 `repair:false` に代償が無い（**意図的**） | `repair: false` でも検知は変わらない。**負の `custom_set` は 2026-07-31 に採点された**（2.4・回帰に昇格済み）ので、この GAP は `repair` だけになった | 2.5 のとおり `repair` が戻すのは状態エンジンの整合性だけで、**検知の枚数として表現するものではない**。入れるなら 2.6（プロセスキャッシュの GC 失敗・ログの欠損）として。`silent-blind-spot` の症状を1段に保つ意味もあるので、当面このまま | 保留（意図的） |
+| 6.5 | ✅ **閉じた**（2026-07-31・ウェーブ機構） | 旧: `stepsOf()` が flatten して1回で流し、engine は波の境界で何もしなかった | `runWave()` / `GAME.phase` が波ごとに区切り、`between` が手番になった（§9.7） | 済 — 回帰テストに昇格済み |
+| 6.6 | 🕳 `Write below etc`（step3）が sandbox なのに同梱扱い | `cron` 段が falcoctl を要求しないので、同梱されていないルールが既定で鳴る（4.3 ②・4.4） | 成熟度と `needs.falcoctl` が一致すること。step3 ↔ step4 の入れ替えで解消する | コンテナレーン |
+| 6.7 | 🕳 `custom_set` の中身が流入量に効かない | `SET_MUL` はプリセット名（`all` / `default` / `custom`）だけを読むので、`custom_set` に何個並べても流入量は同じ | 絞った実際の集合が流入量を決める（2.2 の量的な側） | Phase 1 |
 
 ## 7. README の実測表について
 
@@ -130,3 +139,27 @@ slow output の行だけモデルの真値（19.8%）になりました。6.3 �
 下2本はどちらも `validateShape` を通るので、`index.js` に1行足すだけで遊べます。
 登録した瞬間に「登録済みシナリオがすべてクリア可能」の対象に入るので、
 クリアできない設計ならそこで赤くなります。
+
+**`silent-blind-spot` は登録できる状態になりました**（2026-07-31）。症状の機構である
+**負の `custom_set`（2.4）が採点されるようになった**ので、「HUD は健全なのに1段だけ鳴らない」が
+実際に起こります。`repair:false` の側は意図的に未採点のまま（GAP 6.4）なので、
+このシナリオの症状は**負の指定1本で作る**のが正になります。
+
+---
+
+## 9. ウェーブとノイズ（2026-07-31 · Day 2 の機構）
+
+**過検知でも負ける**、が入りました。リングバッファは**カウンタが付いている**唯一のキューですが、
+唯一のキューではありません。アラートは人間のキュー（SOC）に入り、そこにもレートがあります。
+
+| # | 主張 | 出典 | 実装 | テスト |
+|---|---|---|---|---|
+| 9.1 | ✅ アラート流入が SOC の処理能力を超えると**本物が誤検知に埋もれる**。`buried = 1 - 処理能力/アラート流入` で、**`sustained`（1.2）と同じ式を1段後ろに置いたもの**。ドロップと違って**何のカウンタも上がらない** | 定義（待ち行列の飽和）＝1.2 と同じ | `src/state.js` `noise()` ＋ `src/campaign.js` `evaluate()` の `noise` 原因 | アラートが処理能力を超えると本物が埋もれる（ドロップ 0% のまま1段落ちることを固定） |
+| 9.2 | ✅ **バースト項は無い。** リングバッファには `buf_size_preset` があってスパイクを吸収できるが、人間のキューにその摘みは無いので、手は「**入力を減らす**」か「**処理能力を上げる**」の2つだけ | 1.3 の対偶（`buf_size_preset` は SOC に存在しない） | `noise()` に `burst` 項が無い | 埋没は 1 - 処理能力/流入。バースト項が無い（buf 1–10 すべてで埋没が同一・解析解と5条件で一致） |
+| 9.3 | ✅ `base_syscalls` を絞ると**埋没が止まり、しかもカバレッジは落ちない**（2.1）。有効なルールが要求しないイベントを送らなくなるだけなので、ノイズだけが減る | 2.1 / 2.2 | `noise()` の `breadth` 項 | 入力を絞ると埋没が止まる（検知は落ちない） |
+| 9.4 | ✅ 08 Sysdig は**処理能力を上げる**（相関とグルーピングで、同じアラートが見るべきものとしては少なくなる）。**検知は1段も増えない**（5.2）。そして**建てただけでは効かない** — `STACK` が `sysdig` でなければ相関は働かない。さらに**相関は倍率であって免罪符ではない**（資産が大きくなれば相関しても足りない） | 5.1 / 5.2 | `noise()` の `corr` / `SOC.sysdig` | 08 Sysdig は処理能力を上げるが検知は増やさない（STACK=oss では埋もれたまま・12ノードでは相関しても超過） |
+| 9.5 | ✅ **過負荷なノードは静かなノード。** リングバッファが食べたものは鳴らないので、ドロップは埋没を減らす（`inflow × (1 - dropP)`）。正直で、最悪 | 1.1（落ちたイベントは下流に届かない） | `noise()` の `survive` 項 | 過負荷なノードは静かなノード（slow output で入力不変・ドロップだけ作った条件で厳密一致） |
+| 9.6 | ✅ 埋没の帰属は**入力を増やした側**に付き、算術から導出される（手で注記しない・5.5 と同じ規律）。既定より広げた分が原因なら **SRE**、ルールを増やした分（09 / 07）が超えさせたなら **検知**、資産の規模そのものが能力を超えているなら **SOC**（買っていない能力の話で、誰の設定ミスでもない） | 模型の設計（5.5 の延長） | `src/campaign.js` `noiseBlame()` | 埋没の帰属は入力を増やした側に付く（3つ全部に到達できることを固定） |
+| 9.7 | ✅ 攻撃は**波で来て、境界で止まる**（`build → running → between → over`）。`between` は**手番**で、建設・再チューニング・依頼がそこで効き、次の波がそれを迎える。**ただし失った波は戻らない** — 解決済みの波の結果は書き換わらない | 模型の設計（旧 GAP 6.5） | `src/campaign.js` `runWave()` / `bankWave()` / `afterMove()` | 波は境界で止まり、間に打った手が次の波に効く |
+| 9.8 | ✅ 採点は「**来たもの全部**」に対して1回。`goalStatus()` は**パスが終わるまで判定を返さない**ので、1波目だけを見て勝敗は決まらない | 模型の設計 | `goalStatus()` が `GAME.phase !== 'over'` で `null` | 判定はパスが終わるまで出ない |
+| 9.9 | ✅ 過負荷が盗めるのは**パスにつき1段**（波ごとではない）。波を歩いても、チェーン全体を一度に評価していた頃と**同じ枚数**しか落ちない — これが README §実測した進行 / §実測した帰属 を真に保つ | 模型の設計 | `GAME.budget` = `freshBudget()`（`runAttack()` がパスの頭で1つ作る） | ドロップの予算はパス単位（波ごとには盗まれない・ring を通る波が2本以上ある状態で固定） |

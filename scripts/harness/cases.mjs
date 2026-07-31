@@ -25,16 +25,17 @@
 import './env.mjs';                       /* must stay first — installs the DOM */
 import { advanceClock, reseed } from './env.mjs';
 
-import { S, GAME, TUNE_DEFAULTS, model, hasCap } from '../../src/state.js';
+import { S, GAME, TUNE_DEFAULTS, model, noise, hasCap, working } from '../../src/state.js';
 import { updateVerdict } from '../../src/ui.js';
 import { evaluate, CHAIN, RESPONSE, DEPS, BUILD_ORDER, OWNER, ROLES, blameOf,
-         SCENARIOS, startScenario, activeChain, goalStatus, runAttack,
-         tickReveal, build, requestBuild, canUseLever } from '../../src/campaign.js';
+         SCENARIOS, startScenario, activeChain, activeWaves, waveCount,
+         goalStatus, passResults, runAttack, tickReveal, build, requestBuild,
+         satisfy, canUseLever } from '../../src/campaign.js';
 import { step, spawn, N } from '../../src/sim.js';
 import { DISTRICTS } from '../../src/layout.js';
 import { DEPLOYMENTS, ORCH, NODE_OSES, SOCKETS, K8S_METAS, DRIVERS,
          composeEnv, currentEnv } from '../../src/districts.data.js';
-import { setDeploy, setEnv } from '../../src/controls.js';
+import { setDeploy, setEnv, setMode } from '../../src/controls.js';
 import { SCENARIO_ERRORS } from '../../src/scenarios/index.js';
 
 /* ------------------------------------------------------------------ *
@@ -76,13 +77,24 @@ const plain = s => String(s || '').replace(/<[^>]+>/g, '');
    the harness would be testing a state the app cannot be in. */
 function tune({load=1.0, set='default', buf=4, cpus=2, slow=false,
                driver='modern_ebpf', deploy='k8s', dropAction='alert',
-               custom=[], repair=true} = {}){
+               custom=[], repair=true, mode='oss', nodeCpus=8, nodes=null} = {}){
   S.load = load; S.dead = false; S.deadDrops = 0;
   S.driver = driver;
+  /* the node the whole README 実測表 was measured on. Pinned rather than
+     inherited: startScenario() writes S.cpus from the scenario's environment, so
+     a 2-vCPU scenario would otherwise leak its node size into every later case */
+  S.cpus = nodeCpus;
   S.tune = {...TUNE_DEFAULTS, syscallSet:set, bufPreset:buf,
             cpusPerBuf:cpus, slowOutput:slow, dropAction,
             syscallCustom:custom.slice(), syscallRepair:repair};
+  /* STACK is pinned too: it moves the SOC's triage capacity (state.js §noise),
+     so a scenario that handed over `sysdig` must not silently widen the queue
+     for the cases that run after it */
+  setMode(mode);
   setDeploy(deploy);
+  /* AFTER setDeploy, for the reason startScenario() gives: applyEnv() derives the
+     node count from the topology, and the estate size is the scenario's to say */
+  if(nodes !== null) S.nodes = nodes;
   return model();
 }
 /* the band the player reads. Taken from the real ui.js code path rather than
@@ -114,6 +126,7 @@ const D_25cust  = record('load ×2.5 + custom_set',             tune({load:2.5, 
 const D_all     = record('base_syscalls: all (load ×1.0)',     tune({set:'all'}));
 const D_slow    = record('load ×1.0 + slow output',            tune({slow:true}));
 const D_cpu1    = record('load ×2.5 + cpus_for_each_buffer 1', tune({load:2.5, cpus:1}));
+const D_cpu6    = record('load ×2.5 + cpus_for_each_buffer 6', tune({load:2.5, cpus:6}));
 
 check('健全なノードはドロップしない', () => {
   assert(D_default.dropP === 0, `dropP ${fmt(D_default.dropP)}`);
@@ -195,11 +208,30 @@ check('slow output は syscall 量が普通でもドロップさせる（§1.5�
   return `入力そのまま · cap ${fmt(D_default.cap)} → ${fmt(D_slow.cap)} · util ${pct(D_slow.util)}`;
 });
 
-check('cpus_for_each_buffer を 1 にすると消費能力が上がる（§1.4・要判断）', () => {
-  assert(D_cpu1.cap > D_25.cap, `cap ${fmt(D_cpu1.cap)} ≤ ${fmt(D_25.cap)}`);
-  assert(D_cpu1.dropP < D_25.dropP, 'ドロップが減っていない');
-  return `cap ${fmt(D_25.cap)} → ${fmt(D_cpu1.cap)} · drop ${pct(D_25.dropP)} → ${pct(D_cpu1.dropP)}`
-       + '（INVARIANTS §1.4: Docs の推奨は逆向き）';
+check('cpus_for_each_buffer を上げる（バッファを減らす）と消費能力が上がる（§1.4）', () => {
+  /* Docs の推奨と同じ向き: ドロップ対策は cpus_for_each_buffer を 4–6 に上げ、
+     preset を 6–7 と組ませること。細かく割るほど単一のコンシューマが polling する
+     対象が増えるので、バッファ数が減る方向に消費能力が上がる。
+     この主張は 2026-07-31 に反転した（モデルを Docs に合わせた・INVARIANTS §1.4）。
+     反転を見落とさないために、両方向に assert する。 */
+  assert(D_cpu1.buffers > D_25.buffers, `cpus 1 でバッファが増えていない（${D_cpu1.buffers}）`);
+  assert(D_cpu6.buffers < D_25.buffers, `cpus 6 でバッファが減っていない（${D_cpu6.buffers}）`);
+  assert(D_cpu1.cap < D_25.cap, `cpus 1（${D_cpu1.buffers}本）で cap ${fmt(D_cpu1.cap)} ≥ 既定 ${fmt(D_25.cap)}`);
+  assert(D_cpu1.dropP > D_25.dropP, 'cpus 1 でドロップが増えていない');
+  assert(D_cpu6.cap > D_25.cap, `cpus 6（${D_cpu6.buffers}本）で cap ${fmt(D_cpu6.cap)} ≤ 既定 ${fmt(D_25.cap)}`);
+  assert(D_cpu6.dropP < D_25.dropP, 'cpus 6 でドロップが減っていない');
+  /* 単調でもあること: 途中に良くなる段があってはならない */
+  let prev = -Infinity;
+  for(let c=1; c<=8; c++){
+    const M = tune({load:2.5, cpus:c});
+    assert(M.cap >= prev - 1e-12, `cpus ${c} で cap が下がった`);
+    prev = M.cap;
+  }
+  /* 入力側は動かない。これは消費能力だけの話 */
+  assert(D_cpu1.inflow === D_25.inflow && D_cpu6.inflow === D_25.inflow, '入力が変わっている');
+  return `cap ${fmt(D_cpu1.cap)}（1 → ${D_cpu1.buffers}本） < ${fmt(D_25.cap)}（既定 2 → ${D_25.buffers}本）`
+       + ` < ${fmt(D_cpu6.cap)}（6 → ${D_cpu6.buffers}本）· drop ${pct(D_cpu1.dropP)} / ${pct(D_25.dropP)}`
+       + ` / ${pct(D_cpu6.dropP)} · 1–8 で単調`;
 });
 
 check('負荷に対して単調（util は増加・ドロップは非減少）', () => {
@@ -241,6 +273,10 @@ function play(built, opts = {}){
   GAME.scenario = null;
   GAME.role = null; GAME.roleLocked = false;
   GAME.built = new Set(built);
+  /* a scenario hands over districts that are standing and NOT working; that is
+     its state, not this one's, so drop it or a case that runs after a scenario
+     sees unmet conditions it never asked for */
+  GAME.unmet = {};
   GAME.asks = 0;
   const out = evaluate();
   return {
@@ -250,7 +286,10 @@ function play(built, opts = {}){
     total: out.length,
     det: out.filter(r=>!r.response),
     missed: out.filter(r=>!r.caught),
-    byId: id => out.find(r=>r.id === id)
+    byId: id => out.find(r=>r.id === id),
+    /* 見逃しの内訳。ドロップと埋没は同じ算術の別の段なので（state.js §noise）、
+       「1段盗まれた」を数える主張は原因で数えないと互いに混ざる */
+    by: cause => out.filter(r => r.cause === cause)
   };
 }
 
@@ -266,17 +305,41 @@ check('正の custom_set は有効なルールのカバレッジを奪えない�
        + '盲点を作れるのは負の指定か repair:false（§2.4 / §2.5）';
 });
 
-check('盲点を作れるのは負の指定か repair:false — 記法は区別して持たれている', () => {
-  /* Phase 1 が採点を入れるとき、レバーが3値しかなければ書けない。
-     TUNE_DEFAULTS が両方を別に持っていることが、その前提。 */
+check('記法は区別して持たれている（プリセット / custom_set / repair）', () => {
+  /* 3値のプリセットしか無ければ負の指定は書けない。
+     TUNE_DEFAULTS が別フィールドで持っていることが、盲点の前提。 */
+  assert('syscallSet' in TUNE_DEFAULTS, 'TUNE_DEFAULTS にプリセットが無い');
   assert('syscallCustom' in TUNE_DEFAULTS, 'TUNE_DEFAULTS に custom_set が無い');
   assert('syscallRepair' in TUNE_DEFAULTS, 'TUNE_DEFAULTS に repair が無い');
   assert(Array.isArray(TUNE_DEFAULTS.syscallCustom), 'custom_set が配列でない');
   assert(TUNE_DEFAULTS.syscallRepair === true, 'repair の既定が true でない');
-  const neg = play(ALL, {custom:['!openat','!openat2']});
-  assert(neg.det.length > 0, 'チェーンが空');
-  return 'syscallSet（プリセット）と syscallCustom / syscallRepair が別フィールド。'
-       + `負の指定は記録されるが Phase 0 では採点しない（現在 ${neg.caught}/${neg.total}）`;
+  return 'syscallSet（プリセット）と syscallCustom / syscallRepair が別フィールド';
+});
+
+check('負の指定は盲点を作り、それはドロップとして計測されない（§2.4 / §2.7）', () => {
+  /* 「集めていない syscall は計測できない」— 落ちていないので
+     syscall_event_drops は1つも上がらず、HUD は最後まで健全に見える。 */
+  const open = CHAIN.find(s => (s.needsSyscalls || []).includes('openat'));
+  assert(open, 'openat 系を要求する段が無い');
+  const neg = play(ALL, {set:'custom', custom:open.needsSyscalls.map(n => '!'+n)});
+  const blind = neg.by('blind');
+  assert(blind.length >= 1, `負の指定で盲点ができない（${neg.caught}/${neg.total}）`);
+  assert(blind.some(r => r.id === open.id), `${open.id} が盲点になっていない`);
+  assert(/負の指定/.test(plain(blind[0].why)), `理由が負の指定を名指ししていない`);
+  /* ここが主張の核: 計測に出ない */
+  const M = model();
+  assert(M.dropP === 0 && M.util < 1,
+    `盲点なのにドロップ ${pct(M.dropP)} / util ${pct(M.util)} が動いている`);
+  assert(neg.by('drop').length === 0, 'ドロップ由来の見逃しが混ざっている');
+  assert(neg.blames[neg.out.indexOf(blind[0])] === 'sre', '負の指定の帰属が SRE でない');
+  /* 一部だけ無効にしても、ルールが要求する別の syscall が残れば鳴る */
+  const partial = play(ALL, {set:'custom', custom:['!'+open.needsSyscalls[0]]});
+  assert(partial.by('blind').length === 0,
+    `${open.needsSyscalls[0]} だけを無効にして盲点になった`
+    + `（ルールは ${open.needsSyscalls.join(' / ')} のどれでも鳴る）`);
+  return `${open.needsSyscalls.map(n=>'!'+n).join(' ')} で ${blind.length} 段が盲点 `
+       + `· ドロップ ${pct(M.dropP)} · util ${pct(M.util)}（健全に見える）`
+       + ` · 1つだけ無効では盲点にならない`;
 });
 
 /* ------------------------------------------------------------------ *
@@ -336,14 +399,22 @@ check('全部建てれば全段検知＋封じ込め', () => {
 });
 
 check('ドロップは検知を1段盗む（起因はチューニング・§1.1）', () => {
+  /* 数えるのは「見逃しの総数」ではなく「ドロップ由来の見逃し」。過負荷はアラート量も
+     動かすので（落ちた分は鳴らない → 逆に絞られる）、総数で数えると §9.1 の埋没と
+     混ざる。ここの主張はリングバッファのぶんだけ。 */
   const clean = play(ALL);
   const over  = play(ALL, {load:2.6});
-  assert(over.caught === clean.caught - 1, `${over.caught}/${over.total}`);
-  const lost = over.missed[0];
+  assert(clean.by('drop').length === 0, '健全なノードでドロップ由来の見逃しが出た');
+  assert(over.by('drop').length === 1,
+    `ドロップ由来の見逃しが ${over.by('drop').length} 段（1パスにつき1段であること）`);
+  assert(over.caught < clean.caught, `検知が減っていない（${over.caught}/${over.total}）`);
+  const lost = over.by('drop')[0];
   assert(lost.needs.includes('ring'), 'ring を要求しない段が落ちた');
   assert(/ドロップ/.test(plain(lost.why)), `理由がドロップでない: ${plain(lost.why)}`);
   assert(over.blames[over.out.indexOf(lost)] === 'sre', 'ドロップ由来の見逃しが SRE に帰属していない');
-  return `${clean.caught}/${clean.total} → ${over.caught}/${over.total} · util ${pct(model().util)}`;
+  const other = over.missed.filter(r => r !== lost).map(r => r.cause);
+  return `${clean.caught}/${clean.total} → ${over.caught}/${over.total} · util ${pct(model().util)}`
+       + ` · ドロップ由来 1段` + (other.length ? ` ＋ ${other.join(' / ')} 由来 ${other.length}段（§9.1）` : '');
 });
 
 check('依存の宣言に循環・欠落が無い', () => {
@@ -392,6 +463,80 @@ check('見逃しの理由は原因に紐づく（capability 欠落を「ルー�
   assert(!/インストール形態/.test(plain(k8sapi.why).replace(/（.*?）/g,'')),
     '理由がインストール形態の話になっている');
   return plain(k8sapi.why).slice(0, 60) + '…';
+});
+
+/* ------------------------------------------------------------------ *
+ * 3b. rule maturity — which detections you actually have by default
+ *     INVARIANTS §4.1 / §4.3 / §4.4 / §4.5
+ * ------------------------------------------------------------------ *
+ * Two errors of this exact kind have already shipped, in OPPOSITE directions
+ * (INVARIANTS 4.3): a sandbox rule modelled as bundled, and a stable rule
+ * modelled as needing falcoctl. Neither is visible from inside the code — the
+ * fact lives in falcosecurity/rules — so the maturity of every rule the chain
+ * names is written down HERE, with the file it lives in, and the model is
+ * checked against it. File and maturity are 1:1 in that repo:
+ *
+ *   rules/falco_rules.yaml             stable      25 rules   ← the release package
+ *   rules/falco-incubating_rules.yaml  incubating  31 rules   ← separate OCI artifact
+ *   rules/falco-sandbox_rules.yaml     sandbox     37 rules   ← separate OCI artifact
+ *
+ * which is what backs INVARIANTS 4.1 ("only the stable rules are loaded by
+ * default"): it is not a flag, it is which file you fetched.
+ *
+ * `plugin` is not a maturity: the cloud step's rules come with the plugin's own
+ * ruleset, so they need 07 プラグイン入力 rather than 09 ルール配布. */
+const RULE_MATURITY = {
+  'Terminal shell in container':                            'stable',
+  'Read sensitive file untrusted':                          'stable',
+  'Write below etc':                                        'sandbox',
+  'Drop and execute new binary in container':               'stable',
+  'Contact EC2 Instance Metadata Service From Container':   'incubating',
+  'Contact K8S API Server From Container':                  'stable',
+  'Console Login Without MFA / Delete Bucket Encryption':   'plugin'
+};
+/* Steps whose model is known to disagree with the table, with the lane that owns
+   the fix. Anything NOT listed here is asserted. Empty is the goal. */
+const MATURITY_PENDING = {
+  cron: 'Write below etc は maturity_sandbox（同梱されない）のに falcoctl を要求していない'
+      + ' — コンテナレーンが step3 ↔ step4 の入れ替えで直す（INVARIANTS 4.3 / 4.4）'
+};
+
+G('ルールの成熟度 (§4)');
+
+check('チェーンの各段のルールは成熟度が分かっている', () => {
+  const unknown = CHAIN.filter(s => !RULE_MATURITY[s.rule]);
+  assert(unknown.length === 0,
+    `成熟度が未登録のルールがある: ${unknown.map(s=>`${s.id} (${s.rule})`).join(' / ')}`
+    + '。falcosecurity/rules のどのファイルに居るかを調べて '
+    + 'scripts/harness/cases.mjs の RULE_MATURITY に足すこと（stable / incubating / '
+    + 'sandbox / plugin）。ここを空欄のまま増やせると、同梱されないルールを'
+    + '「既定で鳴る」と書く事故（INVARIANTS 4.3）がまた通る');
+  const n = c => CHAIN.filter(s => RULE_MATURITY[s.rule] === c).length;
+  return `${CHAIN.length} 段 — stable ${n('stable')} / incubating ${n('incubating')}`
+       + ` / sandbox ${n('sandbox')} / plugin 由来 ${n('plugin')}`;
+});
+
+check('同梱されないルールだけが 09 ルール配布を要求する（§4.1 / §4.4）', () => {
+  const wrong = [];
+  for(const s of CHAIN){
+    if(MATURITY_PENDING[s.id]) continue;
+    const m = RULE_MATURITY[s.rule];
+    const gated = s.needs.includes('falcoctl');
+    if(m === 'stable' && gated)
+      wrong.push(`${s.id}: ${s.rule} は stable（同梱）なのに falcoctl を要求している`);
+    if((m === 'incubating' || m === 'sandbox') && !gated)
+      wrong.push(`${s.id}: ${s.rule} は ${m}（同梱なし）なのに falcoctl を要求していない`);
+    if(m === 'plugin'){
+      if(gated) wrong.push(`${s.id}: プラグインのルールセットに falcoctl を要求している`);
+      if(!s.needs.includes('plugins'))
+        wrong.push(`${s.id}: プラグイン由来なのに 07 プラグイン入力を要求していない`);
+    }
+  }
+  assert(wrong.length === 0, wrong.join(' / '));
+  const gated = CHAIN.filter(s => s.needs.includes('falcoctl'));
+  return `falcoctl を要求するのは ${gated.length} 段（`
+       + gated.map(s=>`${s.id}=${RULE_MATURITY[s.rule]}`).join(' / ') + `）· 保留 `
+       + `${Object.keys(MATURITY_PENDING).length} 段`;
 });
 
 /* ------------------------------------------------------------------ *
@@ -534,8 +679,16 @@ check('kernel-less では syscall 由来の段は原理的に検知できない�
 check('構成による見逃しは負荷とは独立（ドロップ由来と混ざらない）', () => {
   const host = play(ALL, {deploy:'host'});
   const both = play(ALL, {deploy:'host', load:2.6});
-  assert(both.caught === host.caught - 1, `${both.caught}/${both.total}`);
-  return `standalone ${host.caught}/${host.total} → standalone+過負荷 ${both.caught}/${both.total}`;
+  /* 独立とは「capability 由来の見逃しが負荷で増えも減りもしない」こと。
+     総数の差で書くと、同時に動くもう1つの queue（§9.1）に引きずられる */
+  assert(both.by('cap').length === host.by('cap').length,
+    `capability 由来の見逃しが ${host.by('cap').length} → ${both.by('cap').length}`);
+  assert(host.by('drop').length === 0, 'load ×1.0 の standalone でドロップした');
+  assert(both.by('drop').length === 1, `ドロップ由来が ${both.by('drop').length} 段`);
+  assert(both.by('cap').every(r => !/ドロップ/.test(plain(r.why))),
+    'capability 由来の見逃しの理由がドロップの話になっている');
+  return `standalone ${host.caught}/${host.total}（cap 由来 ${host.by('cap').length}段）`
+       + ` → standalone+過負荷 ${both.caught}/${both.total}（cap 由来 ${both.by('cap').length}段 ＋ drop 1段）`;
 });
 
 /* ------------------------------------------------------------------ *
@@ -589,6 +742,32 @@ function revealAll(){
     tickReveal(10);
 }
 
+/* Walk a whole pass, wave by wave.
+   ------------------------------------------------------------------
+   `runAttack()` means "let the next wave come" (campaign.js §the wave machine),
+   so one call resolves ONE wave and leaves the game in `between`, which is a
+   turn and not an end. A play-through has to keep going until `over`:
+
+     - goalStatus() returns null until the pass is over, by design
+     - detections accumulate across the waves of one pass, so scoring after the
+       first wave scores a fraction of the attack
+     - GAME.budget is per PASS, so what overload steals is counted once here
+
+   Calling this with the pass already over would start a second one and put
+   GAME.runs up, which is what goal.maxRuns counts — so it asserts instead. */
+function walkPass(){
+  assert(GAME.phase !== 'over', 'パスが終わった状態で walkPass() を呼んだ（runs が増える）');
+  for(let guard=0; guard<64; guard++){
+    if(GAME.phase === 'over') return;
+    assert(runAttack(),
+      `波が進まなかった（phase ${GAME.phase} · wave ${GAME.wave+1}/${waveCount()}）`);
+    revealAll();
+    assert(GAME.phase !== 'running',
+      `波 ${GAME.wave} が解決しきらなかった（reveal ${GAME.reveal}/${GAME.results.length}）`);
+  }
+  throw new Error(`パスが ${waveCount()} 波で終わらない（phase ${GAME.phase}）`);
+}
+
 /* A generic play-through: fix what the role is allowed to fix, build what the
    achievable steps need, ask another team for the rest. No scenario-specific
    knowledge — if a scenario cannot be cleared this way it is either unclearable
@@ -621,10 +800,10 @@ function solve(sc){
     else requestBuild(id);
   }
 
-  runAttack();
-  revealAll();
+  assert(goalStatus() === null, `${sc.id}: 走る前から判定が出ている`);
+  walkPass();
   const st = goalStatus();
-  assert(st, `${sc.id}: 判定が出ない`);
+  assert(st, `${sc.id}: パスが終わったのに判定が出ない（phase ${GAME.phase}）`);
   return st;
 }
 
@@ -641,9 +820,10 @@ check('登録済みシナリオがすべてクリア可能', () => {
     const detail = st.items.map(i =>
       `${i.key} ${i.actual}${i.of !== undefined ? '/'+i.of : ''}${i.ok ? '' : '✗(目標 '+i.target+')'}`
     ).join(' ');
-    lines.push(`${sc.id}: ${detail}`);
+    lines.push(`${sc.id}: ${detail}（${GAME.waveLog.length}波 · ${GAME.runs}パス）`);
     assert(st.cleared, `${sc.id} がクリアできない — ${detail}`
-      + `（役割 ${GAME.role ?? '全役'} · 依頼 ${GAME.asks}）`);
+      + `（役割 ${GAME.role ?? '全役'} · 依頼 ${GAME.asks} · ${GAME.waveLog.length}波`
+      + ` · ${GAME.runs}パス目）`);
   }
   return `${SCENARIOS.length} 本すべてクリア\n         ` + lines.join('\n         ');
 });
@@ -676,6 +856,241 @@ check('シナリオはどれも JSON を往復できる（純データ）', () =
     assert(JSON.stringify(round) === JSON.stringify(sc), `${sc.id} が JSON を往復できない`);
   }
   return `${SCENARIOS.length} 本すべて JSON.stringify → parse で不変`;
+});
+
+/* ------------------------------------------------------------------ *
+ * 6b. noise — the second queue, and why over-detection loses too
+ *     INVARIANTS §9
+ * ------------------------------------------------------------------ *
+ * The ring buffer is not the only queue: alerts land in a human one, and it has
+ * a rate too. Same expression as `sustained`, one stage later, and deliberately
+ * no burst term — a SOC has no buf_size_preset. The point of the whole mechanism
+ * is that "build everything and let everything ring" stops being the optimum, so
+ * what has to be pinned is that BOTH directions lose.
+ *
+ * An estate of 9 nodes at ×1.0 on the default set floods the queue while the
+ * kernel side stays completely healthy (drops 0.000%), which is what makes it a
+ * clean isolation: nothing here is an overload of the ring buffer. */
+G('ノイズ — 過検知でも負ける (§9)');
+
+const FLOOD = {nodes:9, load:1.0};
+const nzOf = (built, opts) => { const r = play(built, opts); return {r, Nz:noise(), M:model()}; };
+
+check('アラートが処理能力を超えると本物が埋もれる（ドロップ 0 でも負ける・§9.1）', () => {
+  const {r, Nz, M} = nzOf(ALL, FLOOD);
+  assert(M.dropP === 0, `リングバッファ側でも落ちている（drop ${pct(M.dropP)}）— 分離できていない`);
+  assert(Nz.util > 1, `queue utilisation ${pct(Nz.util)}`);
+  assert(Nz.buriedP > 0.05, `埋没率 ${pct(Nz.buriedP)}`);
+  assert(r.by('drop').length === 0, 'ドロップ由来の見逃しが混ざっている');
+  assert(r.by('noise').length === 1, `埋没由来の見逃しが ${r.by('noise').length} 段（1段であること）`);
+  const lost = r.by('noise')[0];
+  assert(lost.needs.includes('outputs'), '出力チャネルを要求しない段が埋もれた');
+  assert(/埋も/.test(plain(lost.why)), `理由が埋没の話でない: ${plain(lost.why).slice(0,40)}`);
+  assert(r.caught === r.total - 1,
+    `全段建てて過負荷も無いのに ${r.total - r.caught} 段落ちている（${r.caught}/${r.total}）`);
+  return `${S.nodes}ノード・全建設・drop ${pct(M.dropP)} で ${r.caught}/${r.total} — `
+       + `アラート ${Nz.inflow.toFixed(1)} 件/分 vs 処理能力 ${Nz.cap.toFixed(0)}`
+       + `（queue ${pct(Nz.util)} · 埋没 ${pct(Nz.buriedP)}）`;
+});
+
+check('埋没は 1 - 処理能力/流入。バースト項が無い（§9.2）', () => {
+  /* 解析解そのもの。ドロップ側と同じ式を1段後ろに置いたもの（§1.2） */
+  for(const o of [FLOOD, {...FLOOD, load:1.5}, {...FLOOD, nodes:20},
+                  {nodes:3, set:'all'}, {...FLOOD, mode:'sysdig'}]){
+    const {Nz} = nzOf(ALL, o);
+    eq(Nz.buriedP, Math.max(0, 1 - 1/Nz.util), 1e-12, `解析解との一致 (${JSON.stringify(o)})`);
+  }
+  /* SOC に buf_size_preset は無い: 10 段動かしても埋没は動かない */
+  const base = nzOf(ALL, {...FLOOD, buf:1}).Nz.buriedP;
+  for(let b=1; b<=10; b++){
+    const {Nz} = nzOf(ALL, {...FLOOD, buf:b});
+    eq(Nz.buriedP, base, 0, `buf ${b} の埋没率`);
+  }
+  return `5条件で解析解と一致 · buf 1–10 すべて 埋没 ${pct(base)}（手は「入力を減らす」か「能力を上げる」の2つだけ）`;
+});
+
+check('入力を絞ると埋没が止まる（検知は落ちない・§9.3 / §2.1）', () => {
+  const flood  = nzOf(ALL, FLOOD);
+  const narrow = nzOf(ALL, {...FLOOD, set:'custom'});
+  assert(narrow.Nz.inflow < flood.Nz.inflow, '流入が減っていない');
+  assert(narrow.Nz.util < 1, `queue utilisation ${pct(narrow.Nz.util)}`);
+  assert(narrow.Nz.buriedP === 0, `埋没 ${pct(narrow.Nz.buriedP)}`);
+  assert(narrow.r.by('noise').length === 0, '絞っても埋もれている');
+  /* 正の指定はカバレッジを奪わない（§2.1）ので、埋没が止まった分だけ満点に戻る */
+  assert(narrow.r.caught === narrow.r.total, `${narrow.r.caught}/${narrow.r.total}`);
+  return `アラート ${flood.Nz.inflow.toFixed(1)} → ${narrow.Nz.inflow.toFixed(1)} 件/分`
+       + `（queue ${pct(flood.Nz.util)} → ${pct(narrow.Nz.util)}）· `
+       + `${flood.r.caught}/${flood.r.total} → ${narrow.r.caught}/${narrow.r.total}`;
+});
+
+check('08 Sysdig は処理能力を上げるが検知は増やさない（§9.4 / §5.2）', () => {
+  /* 相関で足りる規模。08 は両方で建っていて、違うのは STACK だけ —
+     「建てただけでは効かない」がこの主張の後半 */
+  const EST    = {nodes:8, load:1.0};
+  const oss    = nzOf(ALL, EST);
+  const sysdig = nzOf(ALL, {...EST, mode:'sysdig'});
+  assert(oss.Nz.corr === false, 'STACK=oss で相関が効いている');
+  assert(sysdig.Nz.corr === true, '08 が建っていて STACK=sysdig なのに相関が効かない');
+  assert(sysdig.Nz.cap > oss.Nz.cap, `処理能力 ${fmt(oss.Nz.cap)} → ${fmt(sysdig.Nz.cap)}`);
+  assert(sysdig.Nz.inflow === oss.Nz.inflow, 'アラートの量が変わっている — 相関は流入を減らさない');
+  assert(sysdig.Nz.util < 1 && sysdig.r.by('noise').length === 0,
+    `queue ${pct(sysdig.Nz.util)} · 埋没由来 ${sysdig.r.by('noise').length} 段`);
+  /* 検知そのものは1段も増えていない（§5.2）。増えたのは受け取れる量だけ */
+  const det = x => x.r.det.filter(s => s.caught && s.cause === null).length;
+  assert(CHAIN.every(s => !s.needs.includes('sysdig')), 'CHAIN の段が sysdig を要求している');
+  assert(det(sysdig) === det(oss) + 1,
+    `埋もれていた1段が戻る以外の変化がある（${det(oss)} → ${det(sysdig)}）`);
+  /* 建っているだけでは足りない、が §9.4 の後半 */
+  assert(oss.r.by('noise').length === 1, 'STACK=oss なのに埋没が止まっている');
+  /* そして相関は倍率であって免罪符ではない: 資産が大きくなれば相関しても足りない */
+  const BIG = {nodes:12, load:1.0};
+  const big = nzOf(ALL, {...BIG, mode:'sysdig'});
+  assert(big.Nz.util > 1 && big.r.by('noise').length === 1,
+    `${BIG.nodes}ノードでも相関だけで足りてしまう（queue ${pct(big.Nz.util)}）`
+    + ' — 処理能力が有限であることが模型から消えている');
+  return `${EST.nodes}ノード: 処理能力 ${fmt(oss.Nz.cap)} → ${fmt(sysdig.Nz.cap)} 件/分（相関 ×2.1）· `
+       + `${oss.r.caught}/${oss.r.total}（STACK=oss）→ ${sysdig.r.caught}/${sysdig.r.total}`
+       + ` · ただし ${BIG.nodes}ノードでは相関しても queue ${pct(big.Nz.util)} で足りない`;
+});
+
+check('過負荷なノードは静かなノード（ドロップは埋没を減らす・§9.5）', () => {
+  /* slow output は syscall の入力量を変えずにドロップだけ作る（§1.5）ので、
+     アラート側の差はまるごと「落ちたものは鳴らない」の効果 */
+  const clean = nzOf(ALL, FLOOD);
+  const slow  = nzOf(ALL, {...FLOOD, slow:true});
+  assert(slow.M.inflow === clean.M.inflow, 'syscall の入力が変わっている');
+  assert(slow.M.dropP > 0 && clean.M.dropP === 0, `drop ${pct(clean.M.dropP)} → ${pct(slow.M.dropP)}`);
+  assert(slow.Nz.inflow < clean.Nz.inflow, 'ドロップしてもアラート量が減っていない');
+  eq(slow.Nz.inflow, clean.Nz.inflow * (1 - slow.M.dropP), 1e-9, '落ちた分だけ鳴らない');
+  return `drop ${pct(slow.M.dropP)} で アラート ${clean.Nz.inflow.toFixed(1)} → `
+       + `${slow.Nz.inflow.toFixed(1)} 件/分（正直で、最悪）`;
+});
+
+check('埋没の帰属は入力を増やした側に付く（§9.6）', () => {
+  /* 誰の判断が溢れさせたか。3つに分かれ、どれも算術から導出される（noiseBlame） */
+  const seen = new Map();
+  const at = (label, opts) => {
+    const {r, Nz} = nzOf(ALL, opts);
+    const noiseMiss = r.by('noise')[0];
+    if(!noiseMiss) return null;
+    const b = r.blames[r.out.indexOf(noiseMiss)];
+    if(!seen.has(b)) seen.set(b, `${b}: ${label}`);
+    return {b, Nz};
+  };
+  /* base_syscalls を既定より広げた = SRE が増やした分だけが超過の原因 */
+  const sre = at('base_syscalls: all（3ノード）', {nodes:3, set:'all'});
+  assert(sre && sre.b === 'sre', `既定より広げた場合の帰属が ${sre ? sre.b : 'なし'}`);
+  assert(sre.Nz.inflow - sre.Nz.parts.breadth <= sre.Nz.cap,
+    '広げた分を戻しても能力を超えている — この条件は SRE のものではない');
+  /* ルールを増やした側（09 / 07）が超えさせた */
+  const det = at('6ノード・falcoctl ＋ plugins', {nodes:6});
+  assert(det && det.b === 'detect', `ルールを増やした場合の帰属が ${det ? det.b : 'なし'}`);
+  assert(det.Nz.parts.base <= det.Nz.cap, 'ベースだけで能力を超えている条件を detect に帰属させた');
+  /* 資産の規模そのものが能力を超えている = 買っていない能力の話 */
+  const soc = at('9ノード（ベースだけで超過）', FLOOD);
+  assert(soc && soc.b === 'soc', `規模が原因の場合の帰属が ${soc ? soc.b : 'なし'}`);
+  assert(soc.Nz.parts.base > soc.Nz.cap, 'ベースだけでは超えていないのに soc に帰属した');
+  return [...seen.values()].join(' · ');
+});
+
+/* ------------------------------------------------------------------ *
+ * 6c. waves — the gap between two waves is a real turn
+ *     INVARIANTS §9.7 / §9.8（旧 GAP 6.5）
+ * ------------------------------------------------------------------ */
+G('ウェーブ (§9)');
+
+/* everything standing AND working: build what is missing, satisfy the conditions
+   a scenario handed over unsatisfied. Uses the real moves, so `between` is
+   exercised the way a player would exercise it. */
+function standUp(){
+  for(const id of BUILD_ORDER){
+    if(GAME.built.has(id)) continue;
+    if(GAME.role === null || OWNER[id] === GAME.role) build(id);
+    else requestBuild(id);
+  }
+  for(const [id, reqs] of Object.entries(GAME.unmet))
+    for(const req of reqs.slice()) satisfy(id, req);
+}
+/* the scenarios that actually declare more than one wave */
+const multiWave = SCENARIOS.filter(s => startScenario(s.id) && waveCount() > 1);
+
+check('波は境界で止まり、間に打った手が次の波に効く（旧 GAP 6.5）', () => {
+  assert(multiWave.length > 0, '2波以上を宣言しているシナリオが1本も無い');
+  const sc = multiWave[0];
+  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+  const waves = waveCount();
+
+  /* 何も足さずに1波目を迎える */
+  assert(runAttack(), '1波目が来ない');
+  revealAll();
+  assert(GAME.phase === 'between', `1波目のあと phase が ${GAME.phase}（between のはず）`);
+  assert(GAME.wave === 0, `wave ${GAME.wave}`);
+  const w1 = GAME.waveLog[0];
+  const before = w1.results.map(r => `${r.id}:${r.caught}`).join(' ');
+  assert(w1.hit < w1.of, `手を打つ前から1波目を全段止めた（${w1.hit}/${w1.of}）`);
+  assert(goalStatus() === null, 'パスが終わる前に判定が出た');
+
+  /* between が手番。ここで打った手は次の波に効くが、失った波は戻らない */
+  const runsBefore = GAME.runs;
+  standUp();
+  assert(GAME.phase === 'between', `手を打ったら phase が ${GAME.phase} に戻った`);
+  assert(GAME.waveLog.length === 1, '手を打ったら解決済みの波が消えた');
+  assert(GAME.waveLog[0].results.map(r => `${r.id}:${r.caught}`).join() === before.split(' ').join(),
+    '1波目の結果が書き換わった — 失った波が戻っている');
+
+  walkPass();
+  assert(GAME.runs === runsBefore, `波を進めただけで runs が ${runsBefore} → ${GAME.runs}`);
+  assert(GAME.waveLog.length === waves, `${waves} 波のうち ${GAME.waveLog.length} 波しか解決していない`);
+  const w2 = GAME.waveLog[1];
+  assert(w2.hit > w1.hit || w2.of !== w1.of,
+    `2波目が1波目と同じ結果（${w2.hit}/${w2.of}）— between で打った手が効いていない`);
+  assert(goalStatus(), 'パスが終わったのに判定が出ない');
+  return `${sc.id}: ${waves}波 · 1波目 ${w1.hit}/${w1.of}（空き地）→ 間に建てる → `
+       + `2波目 ${w2.hit}/${w2.of} · 1パスのまま（runs ${GAME.runs}）`;
+});
+
+check('判定はパスが終わるまで出ない（§9.8）', () => {
+  const sc = multiWave[0];
+  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+  standUp();
+  assert(goalStatus() === null, `build 中に判定が出た（phase ${GAME.phase}）`);
+  const seen = [];
+  for(let i=0; i<waveCount(); i++){
+    runAttack();
+    seen.push(`${GAME.phase}:${goalStatus() ? '判定' : 'なし'}`);
+    assert(goalStatus() === null, `波の途中で判定が出た（phase ${GAME.phase}）`);
+    revealAll();
+    const last = i === waveCount() - 1;
+    assert(!!goalStatus() === last,
+      `${i+1}波目のあと phase ${GAME.phase} で判定が ${goalStatus() ? '出た' : '出ない'}`);
+  }
+  assert(GAME.phase === 'over', `全波のあと phase が ${GAME.phase}`);
+  return `${sc.id}: ${seen.join(' → ')} → over:判定（採点は「来たもの全部」に対して1回）`;
+});
+
+check('ドロップの予算はパス単位（波ごとには盗まれない・§9.9）', () => {
+  const sc = multiWave[0];
+  assert(startScenario(sc.id), `${sc.id}: 起動できない`);
+  standUp();
+  /* 過負荷にする。レバーではなく状況として置くので S.load を直接動かす
+     （lockLoad なシナリオでも「そういう estate だった」は表現できる） */
+  S.load = 3.0;
+  const M = model();
+  assert(M.util > 1 && M.dropP > 0.05,
+    `この構成では過負荷にならない（util ${pct(M.util)} · drop ${pct(M.dropP)}）`);
+  const ringWaves = activeWaves()
+    .filter(w => w.steps.some(s => s.needs.includes('ring'))).length;
+  assert(ringWaves >= 2,
+    `ring を要求する段を含む波が ${ringWaves} 本しかない — 「波ごとではない」を主張できない`);
+  walkPass();
+  const all = passResults();
+  const stolen = all.filter(r => r.cause === 'drop');
+  assert(stolen.length === 1,
+    `${waveCount()} 波のパス全体でドロップ由来の見逃しが ${stolen.length} 段`
+    + `（波ごとに盗まれると ${ringWaves} 段になる）`);
+  assert(GAME.waveLog.length === waveCount(), '全波が解決していない');
+  return `${sc.id}: ${waveCount()}波（うち ring を通る波 ${ringWaves} 本）· `
+       + `util ${pct(M.util)} · ドロップ由来の見逃しはパス全体で 1段`;
 });
 
 /* ------------------------------------------------------------------ *
@@ -773,18 +1188,37 @@ gap('絞れば満点が戻る — custom_set の検知損失が採点に入っ�
        + `。絞るだけで満点に戻る。ルールに届く量は ${pct(passLoss)} 減っているのに代償ゼロ`;
 });
 
-gap('負の custom_set と repair:false が盲点を作らない', 'Phase 1', () => {
+gap('custom_set の中身が流入量に効かない（プリセット名しか読まない）', 'Phase 1', () => {
+  const base = tune({}).inflow;
+  assert(tune({set:'custom', custom:['openat','openat2']}).inflow
+       === tune({set:'custom', custom:['openat','openat2','execve','connect','ptrace']}).inflow,
+    'custom_set の要素数が流入量に効き始めた — GAP は閉じている');
+  return `SET_MUL はプリセット名（all / default / custom）だけを読むので、`
+       + `custom_set に何個並べても流入量は同じ（既定 ${fmt(base)}）。`
+       + '負の指定は採点に効く（§2.4・回帰済み）が、量には効かない';
+});
+
+gap('repair:false に代償が無い（意図的・§2.5）', 'Phase 1', () => {
   const base = play(ALL);
-  const neg  = play(ALL, {custom:['!openat','!openat2','!execve']});
   const nore = play(ALL, {repair:false});
-  assert(neg.caught === base.caught && nore.caught === base.caught,
-    `負の指定 ${neg.caught} / repair:false ${nore.caught} が採点に効き始めた（基準 ${base.caught}）`
-    + ' — GAP は閉じている');
-  const inflow = tune({custom:['openat','openat2']}).inflow;
-  assert(inflow === tune({}).inflow, '正の custom_set が流入量に効き始めた — GAP は閉じている');
-  return `!syscall を3つ指定しても repair:false にしても ${base.caught}/${base.total} のまま。`
-       + '盲点を作れるのはこの2つだけ（§2.4 / §2.5）なので、Phase 1 はここに代償を入れる。'
-       + '正の custom_set が流入量を増やさないのも同じ穴';
+  assert(nore.caught === base.caught,
+    `repair:false が採点に効き始めた（${base.caught} → ${nore.caught}）— GAP は閉じている`);
+  return `repair:false でも ${base.caught}/${base.total} のまま。`
+       + '§2.5 のとおり repair が戻すのは状態エンジンの整合性だけなので、'
+       + '検知の枚数として表現するものではない — 現時点では意図的に未採点。'
+       + '入れるなら §2.6（プロセスキャッシュの GC 失敗・ログの欠損）として';
+});
+
+gap('step3 の Write below etc は sandbox なのに同梱扱い（§4.3 / §4.4）',
+    'コンテナレーン（step3 ↔ step4 入れ替え）', () => {
+  const s = CHAIN.find(x => x.id === 'cron');
+  assert(s, 'cron 段が無い — 入れ替えが入ったなら MATURITY_PENDING と この gap を消すこと');
+  assert(RULE_MATURITY[s.rule] === 'sandbox' && !s.needs.includes('falcoctl'),
+    `${s.id} の成熟度と falcoctl 要求が一致した（${s.rule} = ${RULE_MATURITY[s.rule]}）`
+    + ' — GAP は閉じている。MATURITY_PENDING から cron を消して gap() を削ること');
+  return `${s.id}: ${s.rule} は maturity_sandbox（falco-sandbox_rules.yaml）＝リリースパッケージに`
+       + '同梱されないのに、模型では falcoctl 無しで鳴る。§4.4 の「4本すべて stable」も誤り。'
+       + 'コンテナレーンが step3 ↔ step4 の入れ替えで両方同時に直す';
 });
 
 gap('HUD のドロップ率が p/(1+p) で表示される', 'Phase 1', () => {
