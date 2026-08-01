@@ -192,8 +192,13 @@ const K8S_METAS = [
 const DRIVERS = [
   { id:'modern_ebpf', lbl:'modern_ebpf', kernelPath:true, slab:true,
     note:'CO-RE eBPF。kernel ≥ 5.8、ビルド不要。0.38 以降の既定' },
-  { id:'ebpf', lbl:'ebpf', kernelPath:true, slab:true,
-    note:'legacy eBPF プローブ。2026-12-04 に廃止予定' },
+  /* The retirement date this used to carry (2026-12-04) belongs to SYSDIG's
+     legacy eBPF driver, not to Falco's probe — two clocks with two owners
+     (BOARD D2 / D3). Rather than swap one unsourced date for another, the claim
+     is dropped until INVARIANTS carries it; `deprecated` is the part every
+     source agrees on. */
+  { id:'ebpf', lbl:'ebpf', kernelPath:true, slab:true, deprecated:true,
+    note:'legacy eBPF プローブ。falco-probe.o をカーネルに合わせて用意する必要がある（非推奨）' },
   { id:'kmod', lbl:'kmod', kernelPath:true, slab:true,
     note:'カーネルモジュール。完全な権限が必要。COS では挿入できない' },
   { id:'nodriver', lbl:'nodriver', kernelPath:false, slab:false,
@@ -331,9 +336,87 @@ function setNodeCpus(n){
   if(cpuOverride == null && Number.isInteger(n) && n >= 1) _cpus = Math.min(n, CPU_MAX);
   return _cpus;
 }
-/* the one formula. cpus defaults to the current node so callers cannot forget */
+/* the one formula. cpus defaults to the current node so callers cannot forget.
+   `0` is not "one CPU per buffer" — falco.yaml spells it out as "a single ring
+   buffer shared by ALL online CPUs", which is the opposite end of the range. The
+   TUNING panel only offers 1 / 2 / 4 so this branch is unreachable from the UI
+   today, but the district body quotes the 0 case and the two must not disagree. */
 const bufferCount = (cpusPerBuf, cpus = nodeCpus()) =>
-  Math.max(1, Math.ceil(cpus / Math.max(1, cpusPerBuf)));
+  cpusPerBuf === 0 ? 1
+                   : Math.max(1, Math.ceil(cpus / Math.max(1, cpusPerBuf)));
+
+
+/* ============================================================
+   1a-1c. what a Shield actually CONTAINS
+   ------------------------------------------------------------
+   Until now the two Sysdig Shields were a boundary and a deck: Host Shield was
+   literally "the box drawn round 02〜06", so the one question a viewer arrives
+   with — *what do I get if I put Sysdig in?* — had no answer anywhere in the
+   city. The feature lists are primary-sourced (docs.sysdig.com, Onboarding for
+   Sysdig Secure → Sysdig Shield: "Host Shield consolidates the following
+   features in one application" / same sentence for Cluster Shield) and they are
+   short, closed lists, so they can be drawn rather than summarised.
+
+   The load-bearing field is `kind`, and it exists to protect INVARIANTS §5.2:
+
+     'operate'  this city ALREADY does this, in the districts named by `at`.
+                The Shield does not add it — it takes over running it. Drawn
+                hollow and tethered to those districts, never as a new building.
+                Runtime Threat Detection is the whole reason this distinction
+                has to be in the DATA and not in a builder's discretion: it is
+                the same libs and the same Falco engine (§5.4), so if it ever
+                reads as a detection being ADDED, the model has started lying
+                about the one thing `npm test` guards hardest.
+     'new'      a job the city does not have a district for at all. Vulnerability
+                scanning, posture, remote response. Drawn as a solid building,
+                because something genuinely arrived.
+
+   Four solid buildings and two tethers is therefore the honest picture, and it
+   is readable without a caption: nothing solid lands anywhere near the pipeline.
+
+   `admission_control` has no feature-list name of its own — it is one of the
+   four Cluster Shield config sections the install docs enable — so it carries
+   its config key as its name and nothing else is claimed about it.
+   ============================================================ */
+const SHIELDS = [
+  {
+    id:'host', lbl:'HOST SHIELD', jp:'Host Shield', scope:'node scoped',
+    jpScope:'ノード単位',
+    deploy:'K8s: DaemonSet · 単体ホスト: パッケージ／コンテナ',
+    features:[
+      { id:'runtime', en:'Runtime Threat Detection', jp:'ランタイム脅威検知',
+        kind:'operate', at:['driver','ring','state','rules','outputs'],
+        why:'02〜06 と同じ libs・同じ Falco エンジン。検知は1段も増えない — '+
+            '同じ検知を別の場所から運用するだけ' },
+      { id:'hostVuln', en:'Host Vulnerability Scanning', jp:'ホスト脆弱性スキャン',
+        kind:'new', why:'ホスト上のパッケージを定期スキャンする。振る舞いの検知とは別の仕事' },
+      { id:'kspmHost', en:'KSPM for Hosts', jp:'ホストの姿勢管理',
+        kind:'new', why:'ホストの設定をコンプライアンスポリシーに照らす。予防側' },
+      { id:'rapid', en:'Rapid Response', jp:'遠隔シェルでの初動',
+        kind:'new', why:'指定した担当者がリモートシェルで調査できる。検知ではなく対処' }
+    ]
+  },
+  {
+    id:'cluster', lbl:'CLUSTER SHIELD', jp:'Cluster Shield', scope:'cluster scoped',
+    jpScope:'クラスタ単位（Deployment）',
+    deploy:'クラスタに1つ。守るクラスタが無い構成には存在しない',
+    features:[
+      { id:'ctrVuln', en:'Container Vulnerability Scanning', jp:'コンテナ脆弱性スキャン',
+        key:'container_vulnerability_management',
+        kind:'new', why:'実行中のイメージをスキャンする。この都市に対応する地区は無い' },
+      { id:'k8sAudit', en:'Kubernetes Audit Threat Detection', jp:'K8s 監査ログの脅威検知',
+        key:'audit', kind:'operate', at:['plugins'],
+        why:'07 の k8saudit と同じ入力・同じルール言語。検知は増えず、取得と運用を引き取る' },
+      { id:'kspmCluster', en:'KSPM for Clusters', jp:'クラスタの姿勢管理',
+        key:'posture', kind:'new', why:'クラスタのマニフェストを集めて評価する。予防側' },
+      { id:'admission', en:'admission_control', jp:'アドミッション制御',
+        key:'admission_control', kind:'new',
+        why:'入る前に止める。Cluster Shield の設定4区画のうちの1つで、'+
+            '機能一覧に固有の名前は無いので設定キーのまま置く' }
+    ]
+  }
+];
+const shieldById = id => SHIELDS.find(s => s.id === id) || null;
 
 
 /* ============================================================
@@ -504,6 +587,48 @@ function byDeployId(id){
 
 
 /* ============================================================
+   1a-4. the three rule files
+   ------------------------------------------------------------
+   INVARIANTS §4.1: maturity and FILE are 1:1 in falcosecurity/rules, and only
+   `falco_rules.yaml` ships in the release package. "Is this rule in by default"
+   is therefore not a flag on the rule — it is *which file you fetched*, and the
+   counts (25 / 31 / 37) are what makes "Falco の既定ルールは思ったより少ない"
+   a thing you can see instead of a thing you have to be told.
+
+   `shipped` is the whole causal payload: the district draws a crate per file and
+   opens exactly the ones that are shipped, so the picture cannot drift from the
+   claim. Counts are the number of rules in each file on falcosecurity/rules
+   main, per §4.1.
+   ============================================================ */
+const RULE_FILES = [
+  { id:'stable', lbl:'stable', file:'falco_rules.yaml',
+    count:25, shipped:true,
+    why:'リリースパッケージに同梱される唯一のファイル。既定で読み込まれるのはこれだけ' },
+  { id:'incubating', lbl:'incubating', file:'falco-incubating_rules.yaml',
+    count:31, shipped:false,
+    why:'別の OCI アーティファクト（falco-incubating-rules）。falcoctl で取りに行く' },
+  { id:'sandbox', lbl:'sandbox', file:'falco-sandbox_rules.yaml',
+    count:37, shipped:false,
+    why:'別の OCI アーティファクト（falco-sandbox-rules）。より実験的' }
+];
+/* the ids the engine has actually loaded. A `let` for the same reason
+   CLUSTER_NODES is one: the maturity lever (policies.js §LEVERS) is arriving in
+   another lane, and when it does, setRuleFiles() is the single call that has to
+   reach the ground. Until then the default IS the claim — stable only. */
+let LOADED_RULE_FILES = RULE_FILES.filter(f => f.shipped).map(f => f.id);
+function setRuleFiles(ids){
+  if(!Array.isArray(ids)) return LOADED_RULE_FILES;
+  const known = RULE_FILES.map(f => f.id);
+  LOADED_RULE_FILES = ids.filter(id => known.includes(id));
+  return LOADED_RULE_FILES;
+}
+const loadedRuleFiles = () => LOADED_RULE_FILES;
+const loadedRuleCount = () =>
+  RULE_FILES.filter(f => LOADED_RULE_FILES.includes(f.id))
+            .reduce((n,f) => n + f.count, 0);
+
+
+/* ============================================================
    1. district model  (flow runs along +X)
    ============================================================ */
 const DISTRICTS = [
@@ -538,13 +663,21 @@ const DISTRICTS = [
 <h3>3つの目のうち、どれを使うか</h3>
 <ul>
 <li><code>modern_ebpf</code> — CO-RE eBPF。カーネル 5.8 以上、<strong>ビルド不要・カーネルモジュール不要</strong>。0.38 以降の既定</li>
-<li><code>ebpf</code> — 従来型 eBPF プローブ。<code>falco-probe.o</code> をカーネルに合わせて用意する必要がある（<strong>2026-12-04 に廃止予定</strong>）</li>
+<li><code>ebpf</code> — 従来型 eBPF プローブ。<code>falco-probe.o</code> をカーネルに合わせて用意する必要がある（<strong>非推奨</strong>）</li>
 <li><code>kmod</code> — カーネルモジュール。完全な権限が必要</li>
 <li><code>nodriver</code> — ドライバを注入しない。<span class="mark">syscall ソースが消えるのではなく、カーネル→ユーザ空間のリングバッファが無い</span>ので、実際にイベントを届けるのはプラグインだけになる</li>
 </ul>
 <h3>どこで <code>kmod</code> が選べないのか</h3>
 <p>「マネージド Kubernetes ではカーネルモジュールが使えない」は<strong>誤り</strong>。制約は<span class="mark">ノード OS の属性</span>で、コントロールプレーンを誰が運用しているかとは無関係。Falco が文書化しているのは <strong>GKE の Container-Optimized OS (COS)</strong> ただ1件で、EKS・AKS はそのページに登場しない。</p>
 <p>だから NODE OS を <code>COS</code> にすると <code>kmod</code> のボタンが落ちる。ORCHESTRATOR を動かしても落ちない。</p>
+<h3>この地区だけがカーネル空間にある</h3>
+<p>街に1本だけ引かれている二重線がそれ。<strong>この地区の西の壁と東の壁が、ユーザ空間とカーネル空間の境界</strong>で、越え方が2回とも違う。</p>
+<ul>
+<li><strong>西の壁（01 → 02）</strong> — アプリがカーネルに<em>頼む</em>側。<code>execve</code> を呼ぶのはアプリで、これは全員が必ず通る道。だから<span class="mark">迂回できない</span></li>
+<li><strong>東の壁（02 → 03）</strong> — カーネルがユーザ空間に<em>渡す</em>側。渡し場は共有メモリのリングバッファひとつだけで、<span class="mark">この模型で唯一イベントが落ちる場所</span>がそこ（03）。渡し損ねたら消える</li>
+</ul>
+<p>この2枚の壁が、パイプライン全体のほぼすべての設計判断の理由になっている。<code>base_syscalls</code> が<strong>カーネル側の</strong>安いフィルタなのは、東の壁を越える前に捨てられるから。<code>buf_size_preset</code> と <code>cpus_for_each_buffer</code> が効くのは、東の壁の渡し場の寸法だから。</p>
+<p><code>nodriver</code> のときこの地区は空になり、東の壁が切れる。<span class="mark">syscall というソースが消えたのではなく、カーネル→ユーザ空間の渡し場が無い</span>。プラグイン入力は最初からこの壁を通らないので、まったく影響を受けない。</p>
 <h3>ここが一番安いフィルタ</h3>
 <p>ドライバは <code>sys_enter</code> / <code>sys_exit</code> / <code>sched_process_exit</code> などの tracepoint にアタッチし、<span class="mark">関心のある syscall だけ</span>を選んでリングバッファへ流す。関係ない大量の syscall はここで捨てる。</p>
 <p>この「捨てる場所がカーネル内である」ことが性能の核心。ユーザ空間まで運んでから捨てるのは、運ぶコストを丸ごと払うのと同じ。</p>
@@ -568,7 +701,10 @@ const DISTRICTS = [
 <li><code>buf_size_preset</code> の 8 MiB は<strong>1バッファのサイズ</strong>。しかもバッファは仮想メモリに<strong>二重にマップ</strong>されるので、8 MiB のバッファは仮想メモリ上 <strong>16 MiB</strong> を占める</li>
 <li>現行の設定キーは <code>engine.modern_ebpf.cpus_for_each_buffer</code> と <code>engine.&lt;engine&gt;.buf_size_preset</code>。右の TUNING パネルもこの名前で出している</li>
 </ul>
-<p>この地区が描いている8本のレーンは<strong>ノード数ではなく CPU 数</strong>の話。ノードを増やしても既存ノードのバッファは増えず、DaemonSet の Pod が増える。</p>
+<h3>この地区は「レーン ＝ CPU」「囲い ＝ バッファ」で描いてある</h3>
+<p>溝が1本＝<strong>CPU 1個</strong>。その上に被さっている囲いが<strong>リングバッファ1本</strong>で、<span class="mark">何本の溝を1つの囲いがまとめているかが <code>cpus_for_each_buffer</code></span>。だから TUNING でその値を動かすと、溝の数は変わらないまま囲いの数だけが変わる。既定 2 で 8 vCPU なら囲いは4つ。<code>1</code> にすれば8つ、<code>4</code> にすれば2つ。</p>
+<p>そして <code>?cpus=2</code> のような2 vCPU のノードでは溝が2本しか出ない。既定 2 のままだと囲いは <code>ceil(2÷2) = 1</code> ——<strong>バッファが1本</strong>になる。8 vCPU のノードで4本あったものが1本になるのは、ノードを増やしたからではなく<em>ノードが小さくなったから</em>。</p>
+<p>つまりこの地区は<strong>ノード数ではなく CPU 数</strong>の話をしている。ノードを増やして増えるのは DaemonSet の Pod の数で、溢れているノードの中の囲いは1つも増えない。</p>
 <p>パイプライン全体で、イベントが本当に消えるのはここだけ。だから運用では真っ先にこの数字を見る。</p>
 <h3>ドロップを「見なかったことにしない」</h3>
 <p>Falco はドロップ自体を扱える。<code>syscall_event_drops</code> の設定で <code>ignore</code> / <code>log</code> / <code>alert</code> / <code>exit</code> を選べる。検知基盤が黙って盲目になるより、鳴らして気づくほうが正しい。</p>
@@ -648,9 +784,14 @@ const DISTRICTS = [
   },
   {
     id:'plugins', n:'07', tag:'PLUGIN INPUTS',
-    hoverT:'PLUGIN INPUTS (BYPASS LANE)', hoverS:'syscall 以外の入力も同じルールエンジンへ',
-    hoverM:['k8saudit · cloudtrail · gcpaudit','okta · github · json'],
-    jp:'プラグイン入力', en:'plugin inputs — bypass lane',
+    /* NOT "bypass lane" any more. A bypass merges — that is what the word means
+       and that is what the drawing was saying. Falco does not correlate across
+       sources (INVARIANTS 3.9): the two lanes run in parallel into the SAME
+       engine and land in DIFFERENT rulesets, and nothing crosses between them. */
+    hoverT:'PLUGIN INPUTS — A SEPARATE SOURCE, IN PARALLEL',
+    hoverS:'同じルールエンジンに入るが、syscall とは混ざらない',
+    hoverM:['k8saudit · cloudtrail · gcpaudit','ct.* — 別のフィールド空間'],
+    jp:'プラグイン入力', en:'plugin inputs — a separate source, running in parallel',
     /* wider and deeper than the rest of the north lane because the audit
        route lives here: an apiserver, a transport, and — on managed
        Kubernetes — a whole separate Deployment doing the collecting */
@@ -664,7 +805,8 @@ const DISTRICTS = [
     body:`
 <h3>カーネルの外の出来事も同じ言語で</h3>
 <p>Falco の入力は syscall だけではない。<strong>プラグイン</strong>がイベントソースを増やす — <code>k8saudit</code>（Kubernetes 監査ログ）、<code>cloudtrail</code>、<code>gcpaudit</code>、<code>okta</code>、<code>github</code>、汎用の <code>json</code>。</p>
-<p>重要なのは、これらが <span class="mark">同じルールエンジンに合流する</span>こと。「特権 Pod が作られた」「S3 バケットが公開された」「管理者ロールが付与された」を、syscall 検知と同じ書き方・同じ出力経路で扱える。</p>
+<p>重要なのは、これらが <span class="mark">同じルールエンジンに入る</span>こと。「特権 Pod が作られた」「S3 バケットが公開された」「管理者ロールが付与された」を、syscall 検知と同じ書き方・同じ出力経路で扱える。</p>
+<p><strong>ただし「合流」ではない。</strong>05 ルールエンジンの中に仕切りが1枚立っていて、この道の先はその北側の区画にしか入らない。<span class="mark">並走して同じエンジンに入るが、混ざらない</span>（詳しくは下の「ソース間の相関はしない」）。</p>
 <h3>この道はドライバを通らない</h3>
 <p>プラグイン入力はカーネルのドライバもリングバッファも経由しない。だから <strong>ドライバなしで Falco を動かす</strong>構成も成り立つ（<code>nodriver</code>）。クラウド側のイベントだけを見る使い方。</p>
 <ul>
@@ -682,8 +824,10 @@ const DISTRICTS = [
 <p>つまり EKS の監査経路では <span class="mark">DaemonSet ではなく replicas 1 の Deployment が建ち、そこはドライバもコレクタも無効</span>。ノード上の DaemonSet とは<strong>別の建物</strong>で、役割も違う。DEPLOY で EKS を選ぶと、この地区にその1棟が建つ。</p>
 <p><strong>GKE に一般化してはいけない。</strong>Pub/Sub の exactly-once 配信を使うので、単一リージョン内なら複数インスタンスが明示的に許されている。AKS には単一インスタンスの注意書きが無いので、この模型でも主張しない。</p>
 <h3>ソース間の相関はしない</h3>
-<p>ルールは<strong>イベントソースごとに分割</strong>される。<code>aws_cloudtrail</code> は <code>ct.*</code> という別のフィールド空間を持つ別ソースで、<span class="mark">Falco はソース間の相関をしない</span>。だから「クラウド API の操作が syscall ルールに当たる」ことは原理的に起きない。これはドライバの有無とは無関係な、もっと強い理由。</p>
-<div class="takeaway"><span class="cv">▸</span>検知の言語をひとつに揃えると、運用が増えても複雑さが増えない。</div>`
+<p>ルールは<strong>イベントソースごとに分割</strong>される。1つのルールは <code>source</code> を1つしか持てない（既定 <code>syscall</code>）。<code>aws_cloudtrail</code> は <code>ct.*</code> という<strong>別のフィールド空間</strong>を持つ別ソースで、<span class="mark">Falco はソース間の相関をしない</span>。</p>
+<p>だから「クラウド API の操作が syscall ルールに当たる」ことは<strong>原理的に起きない</strong>。ルールを何本足しても、負荷をいくら下げても、ドロップを 0% にしても起きない。<span class="mark">量の問題ではなく、分割の問題</span>。05 の仕切りに × が描いてあるのはそれで、あの線を越える矢印はこの街に1本も無い。</p>
+<p>そして逆向きにも効く。別ソースなので<strong>カーネル経路の有無と独立に成立する</strong> — <code>nodriver</code> でもクラウド側の検知は取れる。これはドライバの有無とは無関係な、もっと強い理由。</p>
+<div class="takeaway"><span class="cv">▸</span>検知の言語をひとつに揃えると、運用が増えても複雑さが増えない。ただし言語が同じことと、突き合わせられることは別。</div>`
   },
   {
     id:'sysdig', n:'08', tag:'SYSDIG SECURE', floating:true,
@@ -696,12 +840,29 @@ const DISTRICTS = [
 <h3>エンジンは同じ。違うのは周辺</h3>
 <p>Sysdig エージェントは <strong>同じ libs（libscap / libsinsp）と同じ Falco エンジン</strong>を内蔵している。Falco はもともと Sysdig が作って CNCF に寄贈した。だから検知の芯は変わらない。差は、その周りに何があるか。</p>
 <h3>いまの構成は2コンポーネント（Sysdig Shield）</h3>
-<p>Classic Agent 方式を置き換える形で、導入は <strong>Host Shield</strong> と <strong>Cluster Shield</strong> の2つに集約されている。</p>
+<p>Classic Agent 方式を置き換える形で、導入は <strong>Host Shield</strong> と <strong>Cluster Shield</strong> の2つに集約されている。ドライバは Universal eBPF（Linux 5.8+ 推奨）/ kmod（旧カーネル）/ Legacy eBPF（非推奨）。</p>
+<h3>中身は7つ。そして<span class="mark">検知は1つも増えない</span></h3>
+<p>「Sysdig を入れると何が付いてくるのか」は数えられる。街ではこう描き分けてある。</p>
 <ul>
-<li><strong>Host Shield</strong> — ノード単位。Kubernetes では DaemonSet、単体ホストでは Linux バイナリ（パッケージ）やコンテナとしても入る。<span class="mark">この都市の 02〜06 の担当がここ</span>。ドライバは Universal eBPF（Linux 5.8+ 推奨）/ kmod（旧カーネル）/ Legacy eBPF（非推奨）</li>
-<li><strong>Cluster Shield</strong> — クラスタ単位で <em>1つ</em>（Deployment）。<code>admission_control</code> / <code>audit</code> / <code>container_vulnerability_management</code> / <code>posture</code> を担当する</li>
+<li><strong>□ 中空の枠 ＋ 既存地区への矢印</strong> — <span class="mark">この都市がもう持っている仕事を、運用ごと引き取る</span>もの。建物は建たない</li>
+<li><strong>■ 実体のある建物</strong> — この都市に地区が1つも無かった仕事。<em>そこだけが増える</em></li>
 </ul>
-<p>だから <strong>単体ホスト構成では Cluster Shield は存在しない</strong>。DEPLOY を切り替えると、この2つの箱が出たり消えたりする。</p>
+<p><strong>Host Shield（ノード単位・K8s では DaemonSet、単体ホストではパッケージ／コンテナ）</strong></p>
+<ul>
+<li>□ <strong>Runtime Threat Detection</strong> → 02〜06。<span class="mark">同じ libs・同じ Falco エンジン</span>なので、検知は1段も増えない。増えるのは、ノードごとに YAML を配る運用から降りられることだけ</li>
+<li>■ <strong>Host Vulnerability Scanning</strong> — ホストのパッケージを定期スキャン</li>
+<li>■ <strong>KSPM for Hosts</strong> — ホスト設定をコンプライアンスポリシーに照らす</li>
+<li>■ <strong>Rapid Response</strong> — 指定した担当者がリモートシェルで調査できる</li>
+</ul>
+<p><strong>Cluster Shield（クラスタ単位で <em>1つ</em>・Deployment）</strong></p>
+<ul>
+<li>■ <strong>Container Vulnerability Scanning</strong>（<code>container_vulnerability_management</code>）</li>
+<li>□ <strong>Kubernetes Audit Threat Detection</strong>（<code>audit</code>）→ 07。k8saudit と<strong>同じ入力・同じルール言語</strong>。ここも検知は増えず、取得経路と運用が移る</li>
+<li>■ <strong>KSPM for Clusters</strong>（<code>posture</code>）</li>
+<li>■ <code>admission_control</code> — 入る前に止める。設定4区画のうちの1つ</li>
+</ul>
+<p>数えると <strong>■ が5つ、□ が2つ</strong>。<span class="mark">脆弱性・姿勢・応答が増え、検知は増えない</span> — これが「買うか建てるか」の実際の中身。</p>
+<p>そして <strong>単体ホスト構成では Cluster Shield は存在しない</strong>（守るクラスタが無い）。DEPLOY を <code>スタンドアロン</code> にすると、上の4つが街から消える。DEPLOY を切り替えるとこの2つの箱が出たり消えたりするのは、それが実際の配置単位だから。</p>
 <h3>降りてくるもの — ポリシー</h3>
 <ul>
 <li>マネージドルールと Sysdig TRT（Threat Research Team）由来の脅威コンテンツが継続的に降りてくる</li>
@@ -725,18 +886,26 @@ const DISTRICTS = [
     hoverS:'ルールとプラグインは OCI アーティファクトとして配られる',
     hoverM:['stable / incubating / sandbox','同梱されるのは stable だけ'],
     jp:'ルール配布', en:'falcoctl — oci artifacts',
-    w:20, d:16, top:14, lane:'north', after:'rules', dx:-4, color:0xC9AEDA,
-    metrics:[['配布形式','OCI アーティファクト'],['同梱','maturity_stable のみ']],
+    /* 20×16 held three crates you could not see inside. The three rule FILES
+       are the content of this district (§1a-4), so it needs room for three
+       crates big enough to be open or shut and to carry their own count.
+       24×22 fits them in a column with the registry beside them, and it stays
+       clear of the Sysdig deck (x1 = 55 against sysdig's x0 = 60). */
+    w:24, d:22, top:14, lane:'north', after:'rules', dx:-4, color:0xC9AEDA,
+    metrics:[['配布形式','OCI アーティファクト'],['同梱','falco_rules.yaml（stable 25本）のみ']],
     body:`
 <h3>ルールはイメージに焼かない</h3>
 <p>Falco のルールとプラグインは <strong>OCI アーティファクト</strong>としてレジストリから配られ、<code>falcoctl</code> が取得と更新を担う。<span class="mark">ルールを更新するために Falco を再デプロイしなくていい</span>、というのがここの意味。</p>
-<h3>成熟度が段になっている</h3>
+<h3>成熟度は<strong>フラグではなくファイル</strong></h3>
+<p>ここは間違えやすい。「既定で入っているか」はルールに付いた属性ではなく、<span class="mark">どのファイルを取得したか</span>。<code>falcosecurity/rules</code> は成熟度とファイルが <strong>1:1</strong> に分かれていて、incubating のルールは <code>falco_rules.yaml</code> に1本も無い。</p>
 <ul>
-<li><strong>Stable</strong> — <span class="mark">リリースパッケージに同梱されるのはこれだけ</span>。<code>falco_rules.yaml</code> に入っている</li>
-<li><strong>Incubating</strong> — 一定の堅牢性はあるが用途がより限定的。<em>別途インストールが必要</em></li>
-<li><strong>Sandbox</strong> — より実験的なもの</li>
+<li><strong>stable</strong> — <code>falco_rules.yaml</code> · <strong>25本</strong>。<span class="mark">リリースパッケージに同梱されるのはこのファイルだけ</span></li>
+<li><strong>incubating</strong> — <code>falco-incubating_rules.yaml</code> · <strong>31本</strong>。別の OCI アーティファクト（<code>falco-incubating-rules</code>）。一定の堅牢性はあるが用途がより限定的</li>
+<li><strong>sandbox</strong> — <code>falco-sandbox_rules.yaml</code> · <strong>37本</strong>。別の OCI アーティファクト。より実験的</li>
 </ul>
-<p>（ほかに Deprecated がある。）「Falco の既定ルールは思ったより少ない」と感じたら、それは stable しか入っていないから。incubating を足すかどうかは、誤検知をどこまで引き受けるかの判断になる。</p>
+<p>だからこの地区には<strong>箱が3つ並んでいて、開いているのは1つだけ</strong>。開いている箱の中に見えている25個が、あなたが何もしなくても持っているルールの全部。<span class="mark">残りの68本は、封のしてある2つの箱の中にある</span>。</p>
+<p>「Falco の既定ルールは思ったより少ない」と感じたら、それは stable しか入っていないから。incubating を足すかどうかは、誤検知をどこまで引き受けるかの判断になる（開けた分だけ 05 に流れるルールが増え、その分アラートも増える）。</p>
+<p>（ほかに Deprecated がある。）</p>
 <h3>Helm の3つのキーは別物</h3>
 <ul>
 <li><code>falcoctl.config.artifact.install.refs</code> — 起動時に<strong>取得</strong>するもの</li>
@@ -762,6 +931,12 @@ export {
   TOPOLOGIES,
   ENV_AXES,
   ENV_SEL,
+  SHIELDS,
+  shieldById,
+  RULE_FILES,
+  setRuleFiles,
+  loadedRuleFiles,
+  loadedRuleCount,
   DEPLOY_PRESETS,
   composeEnv,
   currentEnv,

@@ -20,6 +20,12 @@ import { DISTRICTS } from './districts.data.js';
      cam:          optional hand-tuned camera; derived if omitted
    ============================================================ */
 const FLOW_X0 = -84, FLOW_GAP = 8, LANE_PAD = 10, BOX_PAD = 5;
+/* Where the rules engine is divided by event source. One rule belongs to exactly
+   one source (INVARIANTS 3.9), so the ruleset is partitioned, and the north
+   fraction of the district is the plugin-source side. Declared here rather than
+   in the builder because both the geometry AND the particle path (ST.joinZ) have
+   to agree about it, and there is exactly one number to agree on. */
+const RULE_SPLIT = 0.262;                  // 42 deep → the divider lands at -10
 /* read by homeView in scene.js; set by the campaign when it takes over the view */
 export let campaignView = false;
 export const setCampaignView = v => { campaignView = v; };
@@ -90,7 +96,20 @@ const ST = {};
   ST.end      = ou.x1 + 9;
   ST.pluginX  = pl.x0;
   ST.pluginZ  = pl.cz;
-  ST.joinZ    = -12;                       // where the bypass lane merges
+  /* Where the plugin lane ENTERS THE RULES ENGINE — not where it "merges",
+     which is what -12 was doing and what the word bypass implied. Falco does not
+     correlate across sources (INVARIANTS 3.9): one rule belongs to exactly one
+     source, so `aws_cloudtrail` events cannot be evaluated by a syscall rule.
+     The rules district is therefore split into two rulesets by a divider
+     (districts.build.js §BUILD_rules), and this is the z of the plugin-source
+     one. Derived from the divider so the geometry and the flow cannot drift:
+     RULE_SPLIT is the fraction of the district's depth the plugin ruleset gets.
+
+     Syscall events settle at z0*0.6 with z0 ∈ ±15, i.e. ±9, which is why the
+     divider sits at -10 — every syscall particle stays south of it, every plugin
+     particle stays north of it, and nothing has to be special-cased. */
+  ST.ruleSplit = ru.z0 + (ru.z1 - ru.z0) * RULE_SPLIT;   // -10 at the default depth
+  ST.joinZ     = (ru.z0 + ST.ruleSplit) / 2 - 0.5;       // middle of the plugin band
   ST.skyX     = sd.cx - 8;
   ST.skyY     = sd.y + 2;
   ST.skyZ     = sd.cz;
@@ -102,6 +121,7 @@ export {
   FLOW_GAP,
   LANE_PAD,
   BOX_PAD,
+  RULE_SPLIT,
   byId,
   isFlow,
   layout,
