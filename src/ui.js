@@ -16,6 +16,7 @@ import {
   projection, passResults, activeWaves
 } from './campaign.js';
 import { resetLog } from './log.js';
+import { openPage, closePage, currentPage } from './page.js';
 import { initMenu, plotTag, plotStyle } from './menu.js';
 import { initAudio, setMuted, audioState } from './audio.js';
 /* progress is read here and written in main.js: save.js decides the shape, this
@@ -891,54 +892,16 @@ function renderGoal(){
    The insight is the answer to the question the scenario asked, so it is a reward
    for having answered it, not something the game says on the way in.
    ============================================================ */
-const elPage  = document.getElementById('page');
-const elPgKick  = document.getElementById('pgKick');
-const elPgStep  = document.getElementById('pgStep');
-const elPgTitle = document.getElementById('pgTitle');
-const elPgStamp = document.getElementById('pgStamp');
-const elPgBody  = document.getElementById('pgBody');
-const elPgNext  = document.getElementById('pgNext');
-const elPgAgain = document.getElementById('pgAgain');
-const elPgNote  = document.getElementById('pgNote');
+/* page.js owns the frame, who is in it, and Escape. This file owns only what the
+   debrief SAYS — and openPage() takes the whole page in one call, so a redraw
+   cannot leave last render's title above this render's body. */
 const elToDebrief = document.getElementById('toDebrief');
 
-/* which page is open, so the feed knows whether to redraw it */
-let pageOpen = null;
+function hideDebrief(){ if(currentPage() === 'debrief') closePage(); }
 
-function closePage(){
-  pageOpen = null;
-  if(elPage) elPage.classList.remove('show');
-}
-function openPage(name){
-  if(!elPage) return;
-  pageOpen = name;
-  elPage.classList.add('show');
-  elPage.scrollTop = 0;      /* a page always opens at its top */
-}
-
-/* one wordmark asset in the document, cloned rather than duplicated — same
-   discipline menu.js uses for the entrance cards */
-if(elPage){
-  const mark = document.querySelector('.brandbar svg');
-  const head = elPage.querySelector('.pghead');
-  if(mark && head) head.insertBefore(mark.cloneNode(true), head.firstChild);
-}
-
-/* ---- the debrief ---------------------------------------------------------- */
-function hideDebrief(){ if(pageOpen === 'debrief') closePage(); }
-
-function renderDebrief(){
-  if(pageOpen !== 'debrief') return;
+function debriefSpec(){
   const sc = activeScenario(), st = goalStatus();
-  if(!sc || !st){ closePage(); return; }
-
-  elPgKick.textContent = 'debrief';
-  elPgStep.textContent = `試行 ${GAME.runs} 回目 · ${activeWaves().length} 波`;
-  elPgTitle.innerHTML = st.cleared
-    ? `<b>${sc.title}</b> を通した。`
-    : `<b>${sc.title}</b> は、まだ通っていない。`;
-  elPgStamp.className = 'pgstamp ' + (st.cleared ? 'win' : 'lose');
-  elPgStamp.textContent = st.cleared ? 'クリア' : '未クリア';
+  if(!sc || !st) return null;
 
   const html = [];
 
@@ -988,35 +951,47 @@ function renderDebrief(){
       + `${b.clears > 1 ? ` · ${b.clears}回クリア` : ''}</span></div>`);
   }
 
-  /* V5 — why the score moved — plugs in HERE, as its own section, once score.js
-     exists. It is not stubbed: an empty "点の内訳" heading would be a promise the
-     game cannot keep yet. The shape this needs is on BOARD as #S5. */
+  /* V5 — why the score moved — plugs in HERE, as its own section, once the rules
+     lane accepts score.js. It is not stubbed: an empty 点の内訳 heading would be
+     a promise the game cannot keep yet. Shape needed is on BOARD as #S5. */
 
-  elPgBody.innerHTML = html.join('');
-
-  /* one click onward. `もう一度流す` is the other half: a not-cleared pass has to
-     be able to leave this page straight into another attempt. */
   const p = progressSummary(scenarioOrder());
   const nx = st.cleared && p.next ? SCENARIOS.find(s => s.id === p.next) : null;
-  elPgNext.hidden = !nx;
-  if(nx){
-    elPgNext.textContent = `次へ — ${nx.title} →`;
-    elPgNext.onclick = ()=>{ closePage(); startScenario(nx.id); };
-  }
-  elPgAgain.hidden = !!nx;
-  elPgAgain.onclick = ()=>{ closePage(); runAttack(); };
 
-  elPgNote.innerHTML = st.cleared
-    ? `${p.total} 本中 ${p.cleared} 本クリア`
-      + (p.complete ? '<br>全シナリオ制覇' : '')
-      + (storageOk() ? '' : '<br>この環境では保存されません')
-    : 'もう一度流すと試行が1回増えます';
+  return {
+    kick:'debrief',
+    step:`試行 ${GAME.runs} 回目 · ${activeWaves().length} 波`,
+    title: st.cleared ? `<b>${sc.title}</b> を通した。`
+                      : `<b>${sc.title}</b> は、まだ通っていない。`,
+    stamp: st.cleared ? 'クリア' : '未クリア',
+    stampKind: st.cleared ? 'win' : 'lose',
+    body: html.join(''),
+    foot: [
+      nx && { label:`次へ — ${nx.title} →`, kind:'go',
+              onClick:()=>{ closePage(); startScenario(nx.id); } },
+      !nx && { label:'もう一度流す', kind:'ghost',
+               onClick:()=>{ closePage(); runAttack(); } },
+      { label:'盤面に戻る', kind:'ghost', onClick:closePage }
+    ].filter(Boolean),
+    note: st.cleared
+      ? `${p.total} 本中 ${p.cleared} 本クリア`
+        + (p.complete ? '<br>全シナリオ制覇' : '')
+        + (storageOk() ? '' : '<br>この環境では保存されません')
+      : 'もう一度流すと試行が1回増えます'
+  };
+}
+
+function renderDebrief(){
+  if(currentPage() !== 'debrief') return;
+  const spec = debriefSpec();
+  if(!spec){ closePage(); return; }
+  openPage('debrief', spec);
 }
 
 function showDebrief(){
-  if(!elPage || !goalStatus()) return;
-  openPage('debrief');
-  renderDebrief();
+  const spec = debriefSpec();
+  if(!spec) return;
+  openPage('debrief', spec);
 }
 
 /* the debrief survives being closed: the insight is the thing worth going back
@@ -1025,16 +1000,6 @@ function syncDebriefEntry(){
   if(elToDebrief) elToDebrief.disabled = !goalStatus();
 }
 if(elToDebrief) elToDebrief.onclick = showDebrief;
-
-if(elPage){
-  document.getElementById('pgClose').onclick = closePage;
-  addEventListener('keydown', ev => {
-    if(ev.key === 'Escape' && pageOpen){
-      ev.stopPropagation();
-      closePage();
-    }
-  }, true);
-}
 
 /* ---- the change feed ---- */
 function renderCampaignAll(){
