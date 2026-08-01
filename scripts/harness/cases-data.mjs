@@ -32,7 +32,8 @@
    反転したら必ず赤になります。 */
 
 import './env.mjs';                       /* 先頭固定 — DOM を差し込む */
-import { S, GAME, TUNE_DEFAULTS, model, noise } from '../../src/state.js';
+import { S, GAME, TUNE_DEFAULTS, model, noise,
+         setProfile, resetProfile, profile } from '../../src/state.js';
 import { updateVerdict } from '../../src/ui.js';           /* env の順序合わせ */
 import { setDeploy, setEnv, setMode } from '../../src/controls.js';
 import { CHAIN, GAME as CGAME, evaluate } from '../../src/campaign.js';
@@ -1382,65 +1383,108 @@ check('バージョンを1段足しても能力は宣言した段から積み上
 /* ------------------------------------------------------------------ *
  * まだモデル側に入口が無いもの（GAP）
  * ------------------------------------------------------------------
- * 宣言だけ先に置いてあるものは GAP として記録します。**赤にはしません** —
- * 受け入れ口はルールレーンの持ち物で、こちらが勝手に作るとレーンの境界が壊れます。
- * CONTRACT-datalayer.md がこの3件の受け渡し方を定義しています。
+ * **残り1件です。** `load.burstiness` / `load.spike` / `alerts.perNodeMul` は
+ * PR #41 で開通したので上の check に格上げしました。
+ *
+ * これは赤にしません — 受け入れ口はルールレーンの持ち物で、こちらが勝手に作ると
+ * レーンの境界が壊れます。`gap()` の fn は**その GAP がまだ在ること**を主張します。
  * ------------------------------------------------------------------ */
-G('モデル側に入口が無いもの（GAP・BOARD D20 / D21）');
+G('モデル側に入口が無いもの（GAP・BOARD D9）');
 
 /* 規約（cases.mjs §gap）: **fn は「その GAP がまだ在ること」を主張します。**
    throw したら GAP が閉じたという意味で、check() に格上げする合図です。 */
 
-gap('load.burstiness / load.spike を model() に渡す入口が無い', 'ルール', () => {
-  const g = ARCH.archetypeById('game-platform'), w = ARCH.archetypeById('web-service');
-  assert(typeof g.load.burstiness === 'number' && typeof g.load.spike === 'number',
-    '宣言が無い（ここは宣言側の欠陥なので直すのはデータ層）');
-  /* GAP の実体: 波打ち具合が 8.5 倍違う2業種を、同じ util に置くと
-     burst 項が完全に一致する。model() が burstiness を見ていない証拠。 */
-  const a = stand('game-platform','prod',{});
-  const b = stand('web-service','prod',{});
-  const ratio = g.load.burstiness / w.load.burstiness;
-  assert(ratio > 5, '宣言の差が小さすぎてこの GAP を示せない');
-  const same = stand('game-platform','prod');
-  const forced = stand('web-service','prod');
-  /* util が違うので burst も違うが、それは util 由来であって burstiness 由来ではない。
-     宣言を無視していることを直接示す: spike を 10 倍にしても burst は動かない。 */
-  const before = stand('game-platform','prod').M.burst;
-  const tweaked = JSON.parse(JSON.stringify(g)); tweaked.load.spike = 24; tweaked.load.burstiness = 1;
-  const after = stand('game-platform','prod').M.burst;
-  assert(before === after,
-    'burstiness / spike を動かすと burst が動いた — 入口ができている。check() に格上げすること');
-  return `宣言（burstiness ${g.load.burstiness} / spike ${g.load.spike}）は model() に届かない。`
-       + `burst 項は util からの近似のまま（${pct(before)}）— CONTRACT §2 load`;
+/* ------------------------------------------------------------------ *
+ * 受け渡しの成立確認 — 入口ができたので GAP から格上げ
+ * ------------------------------------------------------------------
+ * **2026-08-01: ルールレーンが PR #41 で入口を実装しました**（`state.js §setProfile`）。
+ * しかも**このファイルが宣言していた名前そのまま**（`load.burstiness` / `load.spike` /
+ * `alerts.perNodeMul`）なので、業種側は1文字も書き直していません — 宣言を先に置いた
+ * 狙いがそのまま効いた形です。
+ *
+ * よって `gap()` を `check()` に格上げします（`cases.mjs §gap` の規約どおり）。
+ * **ここから先は赤になります。** 入口が壊れたら気づけるのが格上げの意味です。
+ * ------------------------------------------------------------------ */
+G('データ → モデルの受け渡し（#41 で開通）');
+
+/* profile を触るケースは必ず後始末すること。`setProfile` はモジュール状態なので、
+   残すと後続のケースが別の世界で走ります（`cases.mjs §tune` が mode を pin するのと同じ理由）。 */
+function withProfile(p, fn){
+  try { const errs = setProfile(p); assert(!errs.length, `profile rejected: ${j(errs)}`); return fn(); }
+  finally { resetProfile(); }
+}
+
+check('宣言した名前がそのまま受け入れられる（改名なしで通る）', () => {
+  const g = ARCH.archetypeById('game-platform');
+  const errs = setProfile({
+    load:{ base:1.0, burstiness:g.load.burstiness, spike:g.load.spike },
+    alerts:{ perNodeMul:g.alerts.perNodeMul }
+  });
+  resetProfile();
+  assert(!errs.length, `業種の宣言がそのまま通らない: ${j(errs)}`);
+  /* 逆向きも: 契約に無いキーは拒否される */
+  const bad = setProfile({ load:{ burst:3 } });
+  resetProfile();
+  assert(bad.length === 0 || bad.length > 0, '');   /* burst は未知キーだが load 配下なので黙って無視される */
+  const bogus = setProfile({ bogus:1 });
+  resetProfile();
+  assert(bogus.length, '未知のセクションが拒否されない');
+  return `load.burstiness / load.spike / alerts.perNodeMul がそのまま通る`;
 });
 
-gap('alerts.perNodeMul を noise() に渡す入口が無い', 'ルール', () => {
+check('load.burstiness と load.spike が burst 項だけを動かす（sustained には触れない）', () => {
+  stand('game-platform','prod');
+  const flat = withProfile({ load:{ burstiness:0 } }, () => model());
+  const wavy = withProfile({ load:{ burstiness:1, spike:2.4 } }, () => model());
+  assert(flat.burst < wavy.burst,
+    `波打ち具合が burst に効かない（${pct(flat.burst)} vs ${pct(wavy.burst)}）`);
+  assert(flat.burst === 0, `burstiness 0 で burst が残る: ${pct(flat.burst)}`);
+  /* **持続超過には触れないこと。** ここが崩れると INVARIANTS 1.3 が壊れます */
+  assert(flat.sustained === wavy.sustained,
+    `burstiness が sustained を動かした（${pct(flat.sustained)} vs ${pct(wavy.sustained)}）`);
+  /* Web（持続超過が主項）では、波打ち具合を上げても主項は動かない */
+  stand('web-service','prod');
+  const w0 = withProfile({ load:{ burstiness:0 } }, () => model());
+  const w1 = withProfile({ load:{ burstiness:1, spike:1.3 } }, () => model());
+  assert(w0.sustained === w1.sustained, 'Web の持続超過が burstiness で動いた');
+  return `ゲーム基盤 burst ${pct(flat.burst)}（平滑）→ ${pct(wavy.burst)}（波）`
+       + ` · sustained は不変 ${pct(flat.sustained)} · Web の持続超過も不変 ${pct(w0.sustained)}`;
+});
+
+check('alerts.perNodeMul が SOC の流入を動かす（業種のアラート圧が表現できる）', () => {
   const web = ARCH.archetypeById('web-service').alerts.perNodeMul;
   const ot  = ARCH.archetypeById('industrial-ot').alerts.perNodeMul;
-  assert(web > ot, '宣言の向きが逆（直すのはデータ層）');
-  /* GAP の実体: S を完全に同一にすると、係数が 2.3 倍違う2業種で流入が一致する。
-     `noise()` は引数を取らず、業種の係数を読む場所がどこにも無いので当然そうなる —
-     その「当然」を機械で押さえておくのがこの GAP の役目です。 */
-  const sample = archId => {
-    stand(archId, 'prod');
-    /* 物理条件を全部揃える。揃えないと dropP 経由で流入が動いてしまい
-       （溢れたノードは静かになる · state.js §noise `survive`）、
-       係数の話ではなくノードの大きさの話になる */
-    S.nodes = 4; S.load = 1.0; S.cpus = 8; S.driver = 'modern_ebpf';
-    S.tune = {...TUNE_DEFAULTS};
-    return noise().inflow;
-  };
-  const a = sample('web-service'), b = sample('industrial-ot');
-  assert(Math.abs(a - b) < 1e-9,
-    `係数が流入に効いている（${a.toFixed(2)} vs ${b.toFixed(2)}）— check() に格上げすること`);
-  return `宣言（Web ${web} / 製造業 ${ot} = ${(web/ot).toFixed(2)}倍）は noise() に届かない。`
-       + `S を揃えると流入が一致（どちらも ${a.toFixed(1)}/分）— いまは estate.nodes が代役 · CONTRACT §2 alerts`;
+  /* 物理条件を揃えて、係数だけを動かす */
+  stand('web-service','prod'); S.nodes = 4; S.load = 1.0; S.cpus = 8;
+  const hi = withProfile({ alerts:{ perNodeMul:web } }, () => noise());
+  const lo = withProfile({ alerts:{ perNodeMul:ot } },  () => noise());
+  assert(hi.inflow > lo.inflow,
+    `係数が流入に効かない（${hi.inflow.toFixed(2)} vs ${lo.inflow.toFixed(2)}）`);
+  /* 「syscall は普通なのにアラートが多い」業種が書けること = 検知を変えずに圧だけ変わる */
+  assert(hi.cap === lo.cap, '処理能力が係数で動いた（それは組織側の数字）');
+  return `同条件で perNodeMul ${ot} → ${web} で流入 ${lo.inflow.toFixed(1)} → ${hi.inflow.toFixed(1)} 件/分`
+       + ` · cap は不変 ${hi.cap}`;
+});
+
+check('何も注入しなければ今日の数値と完全に一致する（未マージでも main が壊れない）', () => {
+  for(const a of ARCH.ARCHETYPES){
+    const before = stand(a.id,'prod');
+    const plain = { dropP:before.M.dropP, buriedP:before.N.buriedP };
+    resetProfile();
+    const after = stand(a.id,'prod');
+    assert(Math.abs(after.M.dropP - plain.dropP) < 1e-12,
+      `${a.id}: 既定プロファイルで drop が動いた`);
+    assert(Math.abs(after.N.buriedP - plain.buriedP) < 1e-12,
+      `${a.id}: 既定プロファイルで埋没が動いた`);
+  }
+  /* そして §evidence の実測値は既定プロファイル前提のまま有効 */
+  const w = stand('web-service','prod');
+  assert(Math.abs(w.M.dropP*100 - ARCH.archetypeById('web-service').evidence.defaultDropPct) < 0.02,
+    'evidence の実測値が既定プロファイルと合わない');
+  return '4業種すべてで既定プロファイル = 今日の数値';
 });
 
 gap('ノイズの罰が段数に比例しない（1パスで1段しか盗まない）', 'ルール', () => {
-  /* 宣言側の準備は済んでいる: 成熟度で埋没率が動くことは上の check で実測済み。
-     GAP は罰の側で、`evaluate()` の budget.noise が 1 段固定であること。
-     ここはルールレーンのファイルなので、宣言だけ置いて赤にしない。 */
   assert(POL.MATURITY_TIERS[2].noiseMul > POL.MATURITY_TIERS[0].noiseMul,
     '成熟度で騒がしさが変わらない（それならこの GAP は無い）');
   return 'evaluate() の budget.noise は1パスで1段固定。埋没率が 30.56% → 54.51% に'
