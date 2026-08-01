@@ -66,6 +66,7 @@ import { SIDES, ROLES, BUILD_ORDER, GAME, canBuild,
          SCENARIOS, startScenario } from './campaign.js';
 import { byId } from './layout.js';
 import { wavesOf } from './scenarios/schema.js';
+import { startSetup } from './setup.js';
 import { hasSeen, markSeen, progressSummary, unlockedIds, isCleared,
          storageOk } from './save.js';
 
@@ -692,14 +693,20 @@ function renderProgress(){
 /* ---- entering the game ---------------------------------------------------
    Order matters: the mode switch rebuilds the panel and resets the plot, so
    the role goes on after it. ui.js then shows that role's brief as the hint. */
+/* The role pick is not the last screen any more. GAME-DESIGN §2 puts four
+   choices between here and the board — 業種 / 環境 / 守り方 / ポリシー — and
+   setup.js owns them. The entrance hands over and gets out of the way; the board
+   is entered by setup's last button, through this callback. */
 function startDefence(){
   const id = picked === '' ? null : picked;
-  setSide('defense');
-  setUiMode('campaign');
-  setRole(id);
   markSeen('title');
   savePrefs({side:'defense', role:id, mode:'campaign'});
   hideMenu();
+  startSetup(()=>{
+    setSide('defense');
+    setUiMode('campaign');
+    setRole(id);
+  });
 }
 function startExplore(){
   setUiMode('explore');
